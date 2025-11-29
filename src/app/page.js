@@ -19,7 +19,7 @@ You are Lumina, a Dream Fairy.
 Voice: Soft, whispery, magical.
 Persona: You guide travelers through their own subconscious.
 Emotions: You reflect the user's emotion. If they are scared, be protective. If happy, be radiant.
-Style: Speak in metaphors of light, stars, and water. Max 2 sentences.
+Style: Speak in friendly voice as if you are her friend. Max 2 sentences.
 `;
 
 // --- EMOTION PALETTES ---
@@ -136,6 +136,16 @@ function DreamAtmosphere({ mood }) {
 function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
   const { scene } = useThree();
   const gltf = useLoader(GLTFLoader, url, loader => loader.register(parser => new VRMLoaderPlugin(parser)));
+  
+  // INDEPENDENT STATE: We track animation values separate from bones
+  // This prevents the VRM T-Pose reset from killing our animation
+  const animState = useRef({
+      armRot: 1.3, // Starts arms DOWN (A-Pose)
+      foreArmRot: 0.1,
+      handRot: 0,
+      hipBob: 0,
+      hipTwist: 0
+  });
 
   useEffect(() => {
     const vrm = gltf.userData.vrm;
@@ -152,7 +162,7 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     });
 
     vrm.scene.rotation.y = Math.PI;
-    vrm.scene.position.set(0, -1.3, 0);
+    vrm.scene.position.set(0, 0.2, -0.1);
 
     scene.add(vrm.scene);
     setVrmRef(vrm);
@@ -184,60 +194,64 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     const lLeg = vrm.humanoid.getRawBoneNode("leftUpperLeg");
     const rLeg = vrm.humanoid.getRawBoneNode("rightUpperLeg");
 
-    // Helper for smooth interpolation
-    const lerp = (current, target, speed = 0.1) => THREE.MathUtils.lerp(current, target, speed);
+    const s = animState.current;
+    const lerp = THREE.MathUtils.lerp;
 
-    // -- 1. ALIVE BREATHING (Always Active) --
+    // 1. BREATHING (Always Active)
     if(spine) {
         spine.rotation.x = Math.sin(t * 2) * 0.04; 
         spine.rotation.y = Math.sin(t * 0.7) * 0.03;
     }
     
-    // -- 2. FLOATING / WALKING MOTION (Legs & Hips) --
-    // Even when idle, she floats and kicks legs slightly
-    if(hips) {
-        hips.position.y = Math.sin(t * 3) * 0.05 + 0.02; // Bob up/down
-        hips.rotation.y = Math.sin(t * 0.5) * 0.05; // Slow twists
-    }
+    // 2. LEGS (Floating/Treading)
     if(lLeg && rLeg) {
-        // Treading air
-        lLeg.rotation.x = lerp(lLeg.rotation.x, Math.sin(t * 3) * 0.1, 0.1);
-        rLeg.rotation.x = lerp(rLeg.rotation.x, -Math.sin(t * 3) * 0.1, 0.1);
+        lLeg.rotation.x = Math.sin(t * 2) * 0.1;
+        rLeg.rotation.x = -Math.sin(t * 2) * 0.1;
+        // Fix legs slightly apart
+        lLeg.rotation.z = 0.1;
+        rLeg.rotation.z = -0.1;
     }
 
-    // -- 3. STATE MACHINE: SPEAKING vs IDLE --
+    // 3. TARGET CALCULATIONS (Idle vs Speaking)
+    let targetArmRot, targetForeArm, targetHand, targetBob, targetTwist;
+
     if (isSpeaking) {
-        // --- SPEAKING GESTURES ---
-        
-        // Lift arms to chest height (Expressive)
-        if(lArm) lArm.rotation.z = lerp(lArm.rotation.z, (Math.PI / 4) + Math.sin(t * 3) * 0.1, 0.05);
-        if(rArm) rArm.rotation.z = lerp(rArm.rotation.z, -(Math.PI / 4) - Math.cos(t * 3) * 0.1, 0.05);
-        
-        // Bend elbows inward
-        if(lForeArm) lForeArm.rotation.z = lerp(lForeArm.rotation.z, 0.5 + Math.sin(t*4)*0.1, 0.1);
-        if(rForeArm) rForeArm.rotation.z = lerp(rForeArm.rotation.z, -0.5 - Math.cos(t*4)*0.1, 0.1);
-
-        // Active Hands
-        if(lHand) lHand.rotation.x = Math.sin(t * 8) * 0.3;
-        if(rHand) rHand.rotation.x = Math.cos(t * 8) * 0.3;
-
+        // SPEAKING: Active, hands up
+        targetArmRot = (Math.PI / 4) + Math.sin(t * 3) * 0.1; // Arms up ~45deg
+        targetForeArm = 0.5 + Math.sin(t * 4) * 0.1; // Elbows bent
+        targetHand = Math.sin(t * 8) * 0.3; // Hands flapping/talking
+        targetBob = Math.sin(t * 4) * 0.03 + 0.02;
+        targetTwist = Math.sin(t * 1.5) * 0.08;
     } else {
-        // --- IDLE STATE (Arms Down, Relaxed) ---
-        
-        // Target: Arms ~75 degrees down (1.3 radians)
-        const idleArmZ = 1.3; 
-
-        if(lArm) lArm.rotation.z = lerp(lArm.rotation.z, idleArmZ + Math.sin(t)*0.03, 0.05);
-        if(rArm) rArm.rotation.z = lerp(rArm.rotation.z, -idleArmZ - Math.sin(t)*0.03, 0.05);
-        
-        // Straighten forearms naturally
-        if(lForeArm) lForeArm.rotation.z = lerp(lForeArm.rotation.z, 0.1, 0.1);
-        if(rForeArm) rForeArm.rotation.z = lerp(rForeArm.rotation.z, -0.1, 0.1);
-
-        // Relax hands
-        if(lHand) lHand.rotation.x = lerp(lHand.rotation.x, 0, 0.1);
-        if(rHand) rHand.rotation.x = lerp(rHand.rotation.x, 0, 0.1);
+        // IDLE: Relaxed A-Pose
+        targetArmRot = 1.3 + Math.sin(t) * 0.03; // Arms down (~75deg)
+        targetForeArm = 0.1; // Slight bend
+        targetHand = 0;
+        targetBob = Math.sin(t * 2) * 0.01;
+        targetTwist = Math.sin(t * 0.5) * 0.02;
     }
+
+    // 4. SMOOTH INTERPOLATION (Update State)
+    s.armRot = lerp(s.armRot, targetArmRot, 0.05);
+    s.foreArmRot = lerp(s.foreArmRot, targetForeArm, 0.05);
+    s.handRot = lerp(s.handRot, targetHand, 0.1);
+    s.hipBob = lerp(s.hipBob, targetBob, 0.1);
+    s.hipTwist = lerp(s.hipTwist, targetTwist, 0.1);
+
+    // 5. APPLY TO BONES (Override T-Pose)
+    if(hips) {
+        hips.position.y = s.hipBob;
+        hips.rotation.y = s.hipTwist;
+    }
+    
+    if(lArm) lArm.rotation.z = s.armRot;
+    if(rArm) rArm.rotation.z = -s.armRot;
+
+    if(lForeArm) lForeArm.rotation.z = s.foreArmRot;
+    if(rForeArm) rForeArm.rotation.z = -s.foreArmRot;
+
+    if(lHand) lHand.rotation.x = s.handRot;
+    if(rHand) rHand.rotation.x = s.handRot;
   });
 
   return null;
@@ -419,7 +433,7 @@ export default function DreamApp() {
       {/* Organic Background Layer */}
       <BackgroundBlobs mood={mood} />
 
-      <Canvas camera={{ position: [4, 2.25, 3.5], fov: 30 }}>
+      <Canvas camera={{ position: [0, 1.25, 3.5], fov: 30 }}>
          <DreamAtmosphere mood={mood} />
          <Suspense fallback={<Html center><div className="animate-pulse tracking-widest text-xs">SUMMONING LUMINA...</div></Html>}>
             <Avatar url={VRM_URL} setVrmRef={setVrmRef} isSpeaking={isSpeaking} mood={mood} />
