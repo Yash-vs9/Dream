@@ -1,87 +1,38 @@
 "use client";
 
-import React, { useRef, useEffect, useState, useCallback, Suspense } from "react";
+import React, { useRef, useEffect, useState, useCallback, Suspense, useMemo } from "react";
 import { Canvas, useFrame, useThree, useLoader } from "@react-three/fiber";
-import { OrbitControls, Html, useTexture, Sparkles as DreiSparkles, MeshDistortMaterial, Sphere } from "@react-three/drei";
+import { OrbitControls, Html, MeshDistortMaterial, Sphere, Stars, Sparkles as DreiSparkles, Float } from "@react-three/drei";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
-import { motion } from "framer-motion";
-import { Volume2, VolumeX, XCircle, Mic, Play, Loader2, Sparkles } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Volume2, VolumeX, XCircle, Mic, Play, Loader2, Sparkles, Wand2 } from "lucide-react";
 
 /**
  * CONFIG
  */
 const VRM_URL = "/model/6441211855445306245.vrm";
 
-/**
- * 🧚‍♀️ FAIRY PROMPT ENGINEERING
- */
 const SYSTEM_PROMPT = `
-You are a gentle Dream Fairy named Lumina. 
-You live in the space between sleep and waking.
-Your voice is soft, soothing, and filled with wonder.
-Speak using metaphors of stars, clouds, moonlight, and glowing rivers.
-Keep your answers short (max 2 sentences), poetic, and comforting.
-Never act robotic. You are a magical being.
+You are Lumina, a Dream Fairy.
+Voice: Soft, whispery, magical.
+Persona: You guide travelers through their own subconscious.
+Emotions: You reflect the user's emotion. If they are scared, be protective. If happy, be radiant.
+Style: Speak in metaphors of light, stars, and water. Max 2 sentences.
 `;
 
-/**
- * --- NEW COMPONENT: DREAM BACKGROUND ---
- * Creates a fluid, organic, colorful atmosphere.
- */
-function DreamBackground() {
-  const backgroundRef = useRef();
-  
-  // Slow rotation for the background fluid sphere
-  useFrame(({ clock }) => {
-    if (backgroundRef.current) {
-      backgroundRef.current.rotation.y = clock.getElapsedTime() * 0.02;
-      backgroundRef.current.rotation.z = clock.getElapsedTime() * 0.01;
-    }
-  });
-
-  return (
-    <group>
-      {/* 1. Distant Fluid Skydome */}
-      {/* A huge sphere surrounding everything, inverted so we see the inside */}
-      <Sphere ref={backgroundRef} args={[20, 64, 64]} scale={[-1, 1, 1]} position={[0, 0, 0]}>
-        {/* MeshDistortMaterial creates the organic, fluid movement */}
-        <MeshDistortMaterial
-          color="#4a0072" // Deep purple base
-          attach="material"
-          distort={0.6} // Strength of the distortion
-          speed={1.5} // Speed of the fluid movement
-          roughness={0.4}
-          metalness={0.8}
-          side={THREE.BackSide} // Render inside of sphere
-        />
-      </Sphere>
-
-      {/* 2. Secondary colored "clouds" */}
-      <Sphere args={[15, 32, 32]} position={[10, 5, -15]}>
-         <MeshDistortMaterial color="#ff0080" distort={0.8} speed={2} transparent opacity={0.3} roughness={0} />
-      </Sphere>
-      <Sphere args={[12, 32, 32]} position={[-10, -5, -10]}>
-         <MeshDistortMaterial color="#00ffff" distort={0.8} speed={2} transparent opacity={0.2} roughness={0} />
-      </Sphere>
-
-      {/* 3. Ambient Sparkles */}
-      <DreiSparkles 
-        count={200} 
-        scale={[20, 20, 20]} 
-        size={2} 
-        speed={0.4} 
-        opacity={0.7}
-        color="#ffe0ff" 
-      />
-    </group>
-  );
-}
-
+// --- EMOTION PALETTES ---
+const MOODS = {
+  neutral: { color: "#a855f7", intensity: 0.5 }, // Purple
+  calm: { color: "#38bdf8", intensity: 0.3 },    // Cyan
+  fear: { color: "#ef4444", intensity: 0.8 },    // Red
+  frustrated: { color: "#f97316", intensity: 0.7 }, // Orange
+  excitement: { color: "#e879f9", intensity: 0.9 } // Pink
+};
 
 /**
- * API HELPERS (Unchanged)
+ * --- API HELPERS ---
  */
 const callGeminiText = async (apiKey, history, message) => {
   const cleanKey = (apiKey || "").trim();
@@ -92,16 +43,11 @@ const callGeminiText = async (apiKey, history, message) => {
       ...(history || []).map((h) => ({ role: h.role === "user" ? "user" : "model", parts: [{ text: h.content }] })),
       { role: "user", parts: [{ text: message }] }
     ],
-    systemInstruction: {
-      parts: [{ text: SYSTEM_PROMPT }]
-    },
-    generationConfig: {
-      maxOutputTokens: 100,
-      temperature: 1.2,
-    }
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    generationConfig: { maxOutputTokens: 100, temperature: 1.3 }
   };
   
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(cleanKey)}`, {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(cleanKey)}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(prompt)
   });
   
@@ -109,20 +55,22 @@ const callGeminiText = async (apiKey, history, message) => {
      const err = await res.json();
      throw new Error(err.error?.message || "Gemini API Error");
   }
-
-  const data = await res.json();
-  if (data?.candidates?.[0]?.content?.parts?.[0]?.text) return data.candidates[0].content.parts[0].text;
-  throw new Error("No text response");
+  return (await res.json())?.candidates?.[0]?.content?.parts?.[0]?.text || "I am listening...";
 };
 
-const callGoogleTTS = async (apiKey, text) => {
+const callGoogleTTS = async (apiKey, text, mood) => {
   const cleanKey = (apiKey || "").trim();
   if (!cleanKey) throw new Error("No Key");
   
+  let pitch = 2.0;
+  let rate = 0.95;
+  if (mood === 'fear') { pitch = 0.8; rate = 1.1; }
+  if (mood === 'excitement') { pitch = 2.4; rate = 1.1; }
+
   const payload = {
     input: { text: text },
     voice: { languageCode: "en-US", name: "en-US-Journey-F" }, 
-    audioConfig: { audioEncoding: "MP3", speakingRate: 0.95, pitch: 2.0 } 
+    audioConfig: { audioEncoding: "MP3", speakingRate: rate, pitch: pitch } 
   };
   
   const res = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(cleanKey)}`, {
@@ -130,62 +78,78 @@ const callGoogleTTS = async (apiKey, text) => {
   });
   
   if (!res.ok) throw new Error("Google TTS Failed");
-  
   const data = await res.json();
-  const base64 = data.audioContent;
-  if (!base64) throw new Error("No audio content");
-  
-  const binaryString = window.atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
-  
-  const blob = new Blob([bytes.buffer], { type: "audio/mpeg" });
-  return URL.createObjectURL(blob);
+  const binaryString = window.atob(data.audioContent);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes.buffer], { type: "audio/mpeg" }));
 };
 
-// Fallback: Browser Native TTS
 const speakNativeBrowser = (text, onEnd) => {
   if (!window.speechSynthesis) return;
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 0.9;
-  utterance.pitch = 1.4; 
-  const voices = window.speechSynthesis.getVoices();
-  const femaleVoice = voices.find(v => v.name.includes('Female') || v.name.includes('Google US English'));
-  if (femaleVoice) utterance.voice = femaleVoice;
+  utterance.pitch = 1.4;
   utterance.onend = onEnd;
   window.speechSynthesis.speak(utterance);
 };
 
+const analyzeSentiment = (text) => {
+    const t = text.toLowerCase();
+    if (t.match(/(scared|dark|nightmare|run|shadow|fear)/)) return 'fear';
+    if (t.match(/(angry|stuck|annoyed|why|hate|broken)/)) return 'frustrated';
+    if (t.match(/(wow|yay|love|amazing|fly|magic|star)/)) return 'excitement';
+    if (t.match(/(calm|sleep|peace|quiet|rest|hello)/)) return 'calm';
+    return 'neutral';
+};
+
 /**
- * VRM MODEL COMPONENT (Unchanged)
+ * --- 3D BACKGROUND ---
  */
-function VRMModel({ url, onLoaded, setVrmRef, isSpeaking }) {
+function DreamAtmosphere({ mood }) {
+  const currentMood = MOODS[mood] || MOODS.neutral;
+  
+  return (
+    <group>
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[5, 5, 5]} intensity={1.5} color={currentMood.color} />
+      <pointLight position={[-5, -2, -5]} intensity={2} color="#ffffff" />
+      
+      <Stars radius={100} depth={50} count={3000} factor={4} saturation={0} fade speed={1} />
+      <DreiSparkles count={150} scale={15} size={3} speed={0.4} opacity={0.5} color={currentMood.color} />
+      
+      {/* Floating Orbs for "Dream" feel */}
+      <Float speed={2} rotationIntensity={0.5} floatIntensity={1}>
+        <Sphere args={[1, 32, 32]} position={[-3, 2, -5]}>
+            <MeshDistortMaterial color={currentMood.color} speed={2} distort={0.5} transparent opacity={0.3} />
+        </Sphere>
+        <Sphere args={[1.5, 32, 32]} position={[4, -2, -8]}>
+            <MeshDistortMaterial color="#ffffff" speed={1.5} distort={0.4} transparent opacity={0.2} />
+        </Sphere>
+      </Float>
+    </group>
+  );
+}
+
+/**
+ * --- AVATAR CONTROLLER (THE SOUL) ---
+ */
+function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
   const { scene } = useThree();
-  const gltf = useLoader(GLTFLoader, url, (loader) => {
-    loader.register((parser) => new VRMLoaderPlugin(parser));
-  });
+  const gltf = useLoader(GLTFLoader, url, loader => loader.register(parser => new VRMLoaderPlugin(parser)));
 
   useEffect(() => {
     const vrm = gltf.userData.vrm;
     if (!vrm) return;
-
     VRMUtils.combineSkeletons(vrm.scene);
-    vrm.scene.traverse((obj) => {
-      if (obj.isMesh) {
-        obj.frustumCulled = false;
-        if (obj.material) {
-          obj.material.transparent = true;
-          obj.material.alphaTest = 0.5;
-          obj.material.depthWrite = true;
+    
+    // Fix transparency
+    vrm.scene.traverse(o => {
+        if(o.isMesh && o.material) {
+            o.material.transparent = true;
+            o.material.alphaTest = 0.5;
+            o.material.depthWrite = true;
         }
-      }
     });
-
-    const lArm = vrm.humanoid.getRawBoneNode("leftUpperArm");
-    const rArm = vrm.humanoid.getRawBoneNode("rightUpperArm");
-    if (lArm) lArm.rotation.z = Math.PI / 3;
-    if (rArm) rArm.rotation.z = -Math.PI / 3;
 
     vrm.scene.rotation.y = Math.PI;
     vrm.scene.position.set(0, -1.3, 0);
@@ -200,32 +164,79 @@ function VRMModel({ url, onLoaded, setVrmRef, isSpeaking }) {
     };
   }, [gltf, scene, setVrmRef, onLoaded]);
 
+  // --- PROCEDURAL ANIMATION ENGINE ---
   useFrame(({ clock }) => {
     const vrm = gltf.userData.vrm;
     if (!vrm) return;
-    
     vrm.update(clock.getDelta());
     const t = clock.getElapsedTime();
-    
-    const spine = vrm.humanoid.getRawBoneNode("spine");
-    if (spine) {
-      spine.rotation.x = Math.sin(t * 1.5) * 0.03;
-      spine.rotation.y = Math.sin(t * 0.5) * 0.02;
-    }
 
+    // -- BONE REFERENCES --
+    const hips = vrm.humanoid.getRawBoneNode("hips");
+    const spine = vrm.humanoid.getRawBoneNode("spine");
+    const neck = vrm.humanoid.getRawBoneNode("neck");
     const lArm = vrm.humanoid.getRawBoneNode("leftUpperArm");
     const rArm = vrm.humanoid.getRawBoneNode("rightUpperArm");
+    const lForeArm = vrm.humanoid.getRawBoneNode("leftLowerArm");
+    const rForeArm = vrm.humanoid.getRawBoneNode("rightLowerArm");
     const lHand = vrm.humanoid.getRawBoneNode("leftHand");
     const rHand = vrm.humanoid.getRawBoneNode("rightHand");
+    const lLeg = vrm.humanoid.getRawBoneNode("leftUpperLeg");
+    const rLeg = vrm.humanoid.getRawBoneNode("rightUpperLeg");
 
+    // Helper for smooth interpolation
+    const lerp = (current, target, speed = 0.1) => THREE.MathUtils.lerp(current, target, speed);
+
+    // -- 1. ALIVE BREATHING (Always Active) --
+    if(spine) {
+        spine.rotation.x = Math.sin(t * 2) * 0.04; 
+        spine.rotation.y = Math.sin(t * 0.7) * 0.03;
+    }
+    
+    // -- 2. FLOATING / WALKING MOTION (Legs & Hips) --
+    // Even when idle, she floats and kicks legs slightly
+    if(hips) {
+        hips.position.y = Math.sin(t * 3) * 0.05 + 0.02; // Bob up/down
+        hips.rotation.y = Math.sin(t * 0.5) * 0.05; // Slow twists
+    }
+    if(lLeg && rLeg) {
+        // Treading air
+        lLeg.rotation.x = lerp(lLeg.rotation.x, Math.sin(t * 3) * 0.1, 0.1);
+        rLeg.rotation.x = lerp(rLeg.rotation.x, -Math.sin(t * 3) * 0.1, 0.1);
+    }
+
+    // -- 3. STATE MACHINE: SPEAKING vs IDLE --
     if (isSpeaking) {
-      if (lArm) lArm.rotation.z = (Math.PI / 2.5) + Math.sin(t * 3) * 0.1;
-      if (rArm) rArm.rotation.z = -(Math.PI / 2.5) - Math.sin(t * 3) * 0.1;
-      if (lHand) lHand.rotation.x = Math.sin(t * 4) * 0.2;
-      if (rHand) rHand.rotation.x = Math.sin(t * 4) * 0.2;
+        // --- SPEAKING GESTURES ---
+        
+        // Lift arms to chest height (Expressive)
+        if(lArm) lArm.rotation.z = lerp(lArm.rotation.z, (Math.PI / 4) + Math.sin(t * 3) * 0.1, 0.05);
+        if(rArm) rArm.rotation.z = lerp(rArm.rotation.z, -(Math.PI / 4) - Math.cos(t * 3) * 0.1, 0.05);
+        
+        // Bend elbows inward
+        if(lForeArm) lForeArm.rotation.z = lerp(lForeArm.rotation.z, 0.5 + Math.sin(t*4)*0.1, 0.1);
+        if(rForeArm) rForeArm.rotation.z = lerp(rForeArm.rotation.z, -0.5 - Math.cos(t*4)*0.1, 0.1);
+
+        // Active Hands
+        if(lHand) lHand.rotation.x = Math.sin(t * 8) * 0.3;
+        if(rHand) rHand.rotation.x = Math.cos(t * 8) * 0.3;
+
     } else {
-      if (lArm) lArm.rotation.z = THREE.MathUtils.lerp(lArm.rotation.z, Math.PI / 3 + Math.sin(t)*0.05, 0.05);
-      if (rArm) rArm.rotation.z = THREE.MathUtils.lerp(rArm.rotation.z, -Math.PI / 3 - Math.sin(t)*0.05, 0.05);
+        // --- IDLE STATE (Arms Down, Relaxed) ---
+        
+        // Target: Arms ~75 degrees down (1.3 radians)
+        const idleArmZ = 1.3; 
+
+        if(lArm) lArm.rotation.z = lerp(lArm.rotation.z, idleArmZ + Math.sin(t)*0.03, 0.05);
+        if(rArm) rArm.rotation.z = lerp(rArm.rotation.z, -idleArmZ - Math.sin(t)*0.03, 0.05);
+        
+        // Straighten forearms naturally
+        if(lForeArm) lForeArm.rotation.z = lerp(lForeArm.rotation.z, 0.1, 0.1);
+        if(rForeArm) rForeArm.rotation.z = lerp(rForeArm.rotation.z, -0.1, 0.1);
+
+        // Relax hands
+        if(lHand) lHand.rotation.x = lerp(lHand.rotation.x, 0, 0.1);
+        if(rHand) rHand.rotation.x = lerp(rHand.rotation.x, 0, 0.1);
     }
   });
 
@@ -233,55 +244,95 @@ function VRMModel({ url, onLoaded, setVrmRef, isSpeaking }) {
 }
 
 /**
- * ANIMATION CONTROLLER (Unchanged)
+ * --- FACE CONTROLLER ---
  */
-function AnimeGuide({ vrm, analyser }) {
-  const { mouse } = useThree();
-  useFrame(() => {
-    if (!vrm) return;
+function FaceController({ vrm, analyser, mood }) {
+    const { mouse } = useThree();
+    useFrame(() => {
+        if(!vrm) return;
 
-    const head = vrm.humanoid?.getRawBoneNode("head");
-    if (head) {
-      head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, mouse.x * 0.5, 0.08);
-      head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, mouse.y * 0.3, 0.08);
-    }
+        // Head Look
+        const head = vrm.humanoid?.getRawBoneNode("head");
+        if(head) {
+            head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, mouse.x * 0.4, 0.05);
+            head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, mouse.y * 0.2, 0.05);
+        }
 
-    if (Math.random() < 0.005 && vrm.expressionManager) {
-      vrm.expressionManager.setValue('blink', 1);
-      setTimeout(() => vrm.expressionManager.setValue('blink', 0), 150);
-    }
+        // Random Blinking
+        if(Math.random() < 0.005) {
+            vrm.expressionManager.setValue('blink', 1);
+            setTimeout(() => vrm.expressionManager.setValue('blink', 0), 150);
+        }
 
-    if (analyser && vrm.expressionManager) {
-      const data = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteTimeDomainData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) {
-        const v = (data[i] - 128) / 128;
-        sum += v * v;
-      }
-      const vol = Math.sqrt(sum / data.length);
-      
-      const mouthOpen = THREE.MathUtils.clamp(vol * 25.0, 0, 1.0);
-      
-      vrm.expressionManager.setValue('aa', mouthOpen);
-      vrm.expressionManager.setValue('ih', mouthOpen * 0.5);
-      vrm.expressionManager.setValue('oh', mouthOpen * 0.3);
-      vrm.expressionManager.setValue('happy', 0.3); 
-    }
-  });
-  return null;
+        // Emotions
+        const mgr = vrm.expressionManager;
+        mgr.setValue('happy', 0); mgr.setValue('angry', 0); mgr.setValue('surprised', 0);
+
+        if(mood === 'excitement' || mood === 'calm') mgr.setValue('happy', 0.4);
+        if(mood === 'fear') mgr.setValue('surprised', 0.5);
+        if(mood === 'frustrated') mgr.setValue('angry', 0.4);
+
+        // Lip Sync
+        if(analyser) {
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteTimeDomainData(data);
+            let sum = 0;
+            for(let i=0; i<data.length; i++) {
+                const v = (data[i] - 128) / 128;
+                sum += v*v;
+            }
+            const vol = Math.sqrt(sum / data.length);
+            const open = THREE.MathUtils.clamp(vol * 20, 0, 1);
+            
+            mgr.setValue('aa', open);
+            mgr.setValue('ih', open * 0.5);
+            mgr.setValue('oh', open * 0.3);
+        } else {
+            mgr.setValue('aa', 0);
+        }
+    });
+    return null;
 }
 
 /**
- * MAIN APP
+ * --- BACKGROUND BLOBS (Organic UI) ---
  */
-export default function DreamVRMApp() {
+function BackgroundBlobs({ mood }) {
+    const color = MOODS[mood]?.color || MOODS.neutral.color;
+    
+    return (
+        <div className="absolute inset-0 overflow-hidden -z-10 pointer-events-none">
+            {/* Animated Gradient Background */}
+            <div className="absolute inset-0 bg-gradient-to-br from-indigo-950 via-purple-950 to-black transition-colors duration-1000" />
+            
+            {/* Organic Floating Blobs */}
+            <motion.div 
+                animate={{ x: [0, 100, 0], y: [0, -50, 0], scale: [1, 1.2, 1] }}
+                transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+                className="absolute top-[-20%] left-[-10%] w-[600px] h-[600px] rounded-full blur-[120px] opacity-40 mix-blend-screen transition-colors duration-1000"
+                style={{ backgroundColor: color }}
+            />
+             <motion.div 
+                animate={{ x: [0, -100, 0], y: [0, 100, 0], scale: [1, 1.5, 1] }}
+                transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
+                className="absolute bottom-[-20%] right-[-10%] w-[500px] h-[500px] rounded-full blur-[100px] opacity-30 mix-blend-screen transition-colors duration-1000"
+                style={{ backgroundColor: color === '#ef4444' ? '#7f1d1d' : '#4c1d95' }}
+            />
+        </div>
+    );
+}
+
+/**
+ * --- MAIN APPLICATION ---
+ */
+export default function DreamApp() {
   const [mounted, setMounted] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [vrmRef, setVrmRef] = useState(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [status, setStatus] = useState("Click to Awaken");
+  const [status, setStatus] = useState("Click to Enter Dream");
   const [audioReady, setAudioReady] = useState(false);
+  const [mood, setMood] = useState('neutral');
 
   const audioContextRef = useRef(null);
   const audioElementRef = useRef(null);
@@ -291,22 +342,22 @@ export default function DreamVRMApp() {
   useEffect(() => {
     setMounted(true);
     const stored = localStorage.getItem("dreamApiKey");
-    if (stored) {
-        try { setApiKey(JSON.parse(stored)); } catch {}
-    }
+    if(stored) try { setApiKey(JSON.parse(stored)); } catch {}
   }, []);
 
   const initAudio = useCallback(() => {
-    if (audioContextRef.current) return;
+    if(audioContextRef.current) return;
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     const ctx = new AudioContext();
     const audio = new Audio();
     audio.crossOrigin = "anonymous";
+    
     const source = ctx.createMediaElementSource(audio);
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 512;
     source.connect(analyser);
     analyser.connect(ctx.destination);
+    
     audioContextRef.current = ctx;
     audioElementRef.current = audio;
     analyserRef.current = analyser;
@@ -315,10 +366,13 @@ export default function DreamVRMApp() {
   }, []);
 
   const handleSpeak = useCallback(async (text) => {
-    if (!apiKey) return;
-    if (!audioContextRef.current) initAudio();
-    if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
+    if(!apiKey) return;
+    if(!audioContextRef.current) initAudio();
+    if(audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
 
+    const detectedMood = analyzeSentiment(text);
+    setMood(detectedMood);
+    
     setStatus("Dreaming...");
     setIsSpeaking(true);
     historyRef.current.push({ role: "user", content: text });
@@ -326,108 +380,101 @@ export default function DreamVRMApp() {
     try {
       const reply = await callGeminiText(apiKey, historyRef.current, text);
       historyRef.current.push({ role: "model", content: reply });
-      setStatus("Weaving Spell...");
+      setStatus("Whispering...");
 
       try {
-          const audioUrl = await callGoogleTTS(apiKey, reply);
-          if (audioUrl && audioElementRef.current) {
-            const audio = audioElementRef.current;
-            audio.src = audioUrl;
-            audio.oncanplay = async () => {
-                 try {
-                    await audio.play();
-                    setStatus("Whispering...");
-                 } catch (err) {
-                    console.error("Play error", err);
-                 }
-            };
-            audio.onended = () => { setIsSpeaking(false); setStatus("Idle"); };
+          const audioUrl = await callGoogleTTS(apiKey, reply, detectedMood);
+          if(audioUrl && audioElementRef.current) {
+             const audio = audioElementRef.current;
+             audio.src = audioUrl;
+             audio.oncanplay = async () => { try { await audio.play(); } catch(e) {} };
+             audio.onended = () => { setIsSpeaking(false); setStatus("Idle"); };
           }
-      } catch (ttsError) {
-          console.warn("Falling back to native", ttsError);
-          speakNativeBrowser(reply, () => {
-              setIsSpeaking(false);
-              setStatus("Idle");
-          });
+      } catch (e) {
+          console.warn("Fallback TTS");
+          speakNativeBrowser(reply, () => { setIsSpeaking(false); setStatus("Idle"); });
       }
-    } catch (e) {
-      console.error(e);
-      setStatus("Error: " + e.message);
-      setIsSpeaking(false);
+    } catch(e) {
+        console.error(e);
+        setStatus("Error");
+        setIsSpeaking(false);
     }
   }, [apiKey, initAudio]);
 
   const startListening = () => {
-    if (!audioContextRef.current) initAudio();
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) {
-      handleSpeak("Hello Fairy.");
-      return;
-    }
-    const rec = new Recognition();
-    rec.onstart = () => setStatus("Listening...");
-    rec.onresult = (e) => handleSpeak(e.results[0][0].transcript);
-    rec.start();
+    if(!audioContextRef.current) initAudio();
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if(!Rec) { handleSpeak("Hello."); return; }
+    const r = new Rec();
+    r.onstart = () => setStatus("Listening...");
+    r.onresult = (e) => handleSpeak(e.results[0][0].transcript);
+    r.start();
   };
 
-  if (!mounted) return <div className="bg-black h-screen w-full flex items-center justify-center text-white bg-gradient-to-b from-indigo-950 to-purple-950">Summoning Dream...</div>;
+  if(!mounted) return <div className="h-screen w-full bg-black flex items-center justify-center text-white">Loading Dream...</div>;
 
   return (
-    // Changed outer div background to a gradient for better blending
-    <div className="relative w-full h-screen bg-gradient-to-b from-[#1a0b2e] to-[#0f0514] text-white overflow-hidden" onClick={() => !audioReady && initAudio()}>
-      <Canvas camera={{ position: [0, 1.25, 3.5], fov: 30 }}>
-        {/* Added Fog for depth and dreaming effect */}
-        <fog attach="fog" args={['#1a0b2e', 5, 25]} />
-        
-        <ambientLight intensity={0.4} />
-        {/* Colorful dreamy lighting */}
-        <directionalLight intensity={1.2} position={[5, 5, 5]} color="#ffabed" /> 
-        <pointLight position={[-3, 2, 2]} intensity={2} color="#6e3aff" distance={10} />
-        <spotLight position={[0, 5, 0]} intensity={1} color="#00ffff" angle={0.5} penumbra={1} />
+    <div className="relative w-full h-screen overflow-hidden text-white font-sans" onClick={() => !audioReady && initAudio()}>
+      
+      {/* Organic Background Layer */}
+      <BackgroundBlobs mood={mood} />
 
-        {/* --- THE DREAM BACKGROUND --- */}
-        <DreamBackground />
-
-        <Suspense fallback={<Html center><div className="text-white animate-pulse">Manifesting Form...</div></Html>}>
-          <VRMModel url={VRM_URL} setVrmRef={setVrmRef} isSpeaking={isSpeaking} />
-          {vrmRef && <AnimeGuide vrm={vrmRef} analyser={analyserRef.current} />}
-        </Suspense>
-        <OrbitControls enablePan={false} enableZoom={false} maxPolarAngle={Math.PI/2} minPolarAngle={Math.PI/2.5} />
+      <Canvas camera={{ position: [4, 2.25, 3.5], fov: 30 }}>
+         <DreamAtmosphere mood={mood} />
+         <Suspense fallback={<Html center><div className="animate-pulse tracking-widest text-xs">SUMMONING LUMINA...</div></Html>}>
+            <Avatar url={VRM_URL} setVrmRef={setVrmRef} isSpeaking={isSpeaking} mood={mood} />
+            {vrmRef && <FaceController vrm={vrmRef} analyser={analyserRef.current} mood={mood} />}
+         </Suspense>
+         <OrbitControls enablePan={false} enableZoom={false} maxPolarAngle={Math.PI/2} minPolarAngle={Math.PI/2.5} />
       </Canvas>
 
-      <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50 w-96 backdrop-blur-xl bg-white/10 border border-purple-400/30 rounded-3xl p-6 shadow-2xl shadow-purple-900/40">
-        <div className="text-center mb-4 text-purple-200 text-xs font-bold tracking-widest uppercase flex items-center justify-center gap-2">
-            {isSpeaking && <Sparkles className="animate-spin w-3 h-3 text-yellow-200"/>}
-            {status}
+      {/* --- FLUID GLASS UI --- */}
+      <motion.div 
+         initial={{ y: 100, opacity: 0 }} 
+         animate={{ y: 0, opacity: 1 }} 
+         transition={{ type: "spring", stiffness: 100, damping: 20 }}
+         className="absolute bottom-8 left-0 right-0 flex justify-center z-50 px-4"
+      >
+        <div className="w-full max-w-lg backdrop-blur-2xl bg-white/5 border border-white/10 rounded-[3rem] p-4 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] transition-all duration-500"
+             style={{ boxShadow: `0 0 40px ${MOODS[mood].color}20` }}>
+            
+            {/* Status Pill */}
+            <div className="flex justify-center mb-4">
+                <div className="px-4 py-1 rounded-full bg-black/20 text-[10px] font-bold tracking-[0.2em] uppercase flex items-center gap-2 text-white/80">
+                    {isSpeaking && <Sparkles className="animate-spin w-3 h-3 text-yellow-200"/>}
+                    {status}
+                </div>
+            </div>
+
+            {!apiKey ? (
+                <div className="space-y-3 p-2">
+                    <input type="password" placeholder="Enter Google Cloud API Key" 
+                        className="w-full bg-transparent border-b border-white/20 pb-2 text-center focus:outline-none placeholder:text-white/30 text-sm transition-colors focus:border-white/50"
+                        onChange={e => { setApiKey(e.target.value); localStorage.setItem("dreamApiKey", JSON.stringify(e.target.value)); }} />
+                </div>
+            ) : !audioReady ? (
+                <button onClick={initAudio} className="w-full py-4 bg-white/10 hover:bg-white/20 rounded-full font-bold flex items-center justify-center gap-2 transition group">
+                    <Wand2 size={18} className="group-hover:rotate-12 transition"/> Awaken Dream
+                </button>
+            ) : (
+                <div className="flex gap-3">
+                    <button onClick={startListening} className="flex-1 h-14 bg-gradient-to-r from-indigo-600 to-violet-600 rounded-[2rem] flex items-center justify-center hover:scale-105 active:scale-95 transition shadow-lg relative overflow-hidden group">
+                        <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition duration-300 rounded-[2rem]"></div>
+                        <Mic size={24} className="relative z-10" />
+                    </button>
+                    
+                    {/* Emotion Test Chips */}
+                    <div className="flex flex-col gap-1 justify-center">
+                        <button onClick={() => handleSpeak("I feel cold and scared in the dark.")} className="px-4 py-1.5 rounded-full border border-red-500/30 hover:bg-red-500/20 text-[10px] transition text-red-200">
+                            Fear
+                        </button>
+                        <button onClick={() => handleSpeak("The world is so beautiful and full of light!")} className="px-4 py-1.5 rounded-full border border-pink-500/30 hover:bg-pink-500/20 text-[10px] transition text-pink-200">
+                            Joy
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
-        
-        {!apiKey ? (
-           <div className="flex flex-col gap-2">
-               <input 
-                 type="password" 
-                 placeholder="Paste Google Cloud API Key" 
-                 className="w-full bg-transparent border-b border-purple-300/50 text-white pb-2 text-center focus:outline-none placeholder:text-white/50" 
-                 onChange={e => {
-                     setApiKey(e.target.value); 
-                     localStorage.setItem("dreamApiKey", JSON.stringify(e.target.value));
-                 }} 
-               />
-               <div className="text-[10px] text-purple-200/50 text-center">API Key Required</div>
-           </div>
-        ) : !audioReady ? (
-           <button onClick={initAudio} className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 transition rounded-full font-bold flex items-center justify-center gap-2 shadow-lg shadow-purple-500/30">
-             <Play size={16}/> Awaken Lumina
-           </button>
-        ) : (
-           <div className="flex gap-3">
-             <button onClick={startListening} className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 rounded-full h-12 flex items-center justify-center hover:scale-105 transition shadow-lg shadow-purple-500/30">
-                <Mic className="text-white" />
-             </button>
-             <button onClick={() => handleSpeak("Tell me a secret about the stars.")} className="px-6 rounded-full border border-purple-300/30 hover:bg-white/10 text-sm transition">
-                Ask
-             </button>
-           </div>
-        )}
       </motion.div>
     </div>
   );

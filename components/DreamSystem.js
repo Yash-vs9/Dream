@@ -1,508 +1,450 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useMemo, Suspense, useCallback } from 'react';
-import { Canvas, useFrame, useThree, extend } from '@react-three/fiber';
-import { useGLTF, Float, Sparkles, Cloud, Text, Environment, PerspectiveCamera, Stars, Instances, Instance, MeshDistortMaterial } from '@react-three/drei';
-import { EffectComposer, Bloom, Noise, ChromaticAberration, Vignette, Glitch, Scanline } from '@react-three/postprocessing';
-import { motion, AnimatePresence } from 'framer-motion';
-import * as THREE from 'three';
-import { GlitchMode, BlendFunction } from 'postprocessing';
+import React, { useRef, useEffect, useState, useCallback, Suspense, useMemo } from "react";
+import { Canvas, useFrame, useThree, useLoader } from "@react-three/fiber";
+import { OrbitControls, Html, MeshDistortMaterial, Sphere, Stars, Sparkles as DreiSparkles } from "@react-three/drei";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
+import { motion, AnimatePresence } from "framer-motion";
+import { Volume2, VolumeX, XCircle, Mic, Play, Loader2, Sparkles } from "lucide-react";
 
-// --- AUDIO ENGINE: GENERATIVE SOUNDSCAPE ---
-// Creates real-time ambient music based on emotional state
-class AudioEngine {
-  constructor() {
-    if (typeof window === 'undefined') return;
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    this.oscillators = [];
-    this.gainNodes = [];
-    this.masterGain = this.ctx.createGain();
-    this.masterGain.connect(this.ctx.destination);
-    this.masterGain.gain.value = 0.1; // Low ambient volume
-  }
+/**
+ * CONFIG
+ */
+const VRM_URL = "/model/6441211855445306245.vrm";
 
-  playChord(mood) {
-    if (this.ctx.state === 'suspended') this.ctx.resume();
-    
-    // Stop previous
-    this.oscillators.forEach(osc => osc.stop());
-    this.oscillators = [];
+const SYSTEM_PROMPT = `
+You are Lumina, a Dream Fairy.
+Voice: Soft, whispery, magical.
+Persona: You guide travelers through their own subconscious.
+Emotions: You reflect the user's emotion. If they are scared, be protective. If happy, be radiant.
+Style: Speak in metaphors of light, stars, and water. Max 2 sentences.
+`;
 
-    // Mood scales
-    const scales = {
-      neutral: [261.63, 329.63, 392.00, 523.25], // C Major
-      fear: [110.00, 123.47, 155.56, 196.00],    // Diminished / Dissonant
-      joy: [349.23, 440.00, 523.25, 698.46],     // F Major (Uplifting)
-      sadness: [220.00, 261.63, 329.63, 392.00]  // A Minor
-    };
-
-    const notes = scales[mood] || scales.neutral;
-    const now = this.ctx.currentTime;
-
-    notes.forEach((freq, i) => {
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      
-      osc.type = mood === 'fear' ? 'sawtooth' : 'sine';
-      osc.frequency.setValueAtTime(freq, now);
-      
-      // Envelope
-      gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(0.05, now + 2); // Slow attack
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 8); // Long decay
-
-      osc.connect(gain);
-      gain.connect(this.masterGain);
-      osc.start(now);
-      osc.stop(now + 10);
-      
-      this.oscillators.push(osc);
-    });
-  }
-
-  playBlip() {
-    if (!this.ctx) return;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.frequency.setValueAtTime(800, this.ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(100, this.ctx.currentTime + 0.1);
-    gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
-    osc.connect(gain);
-    gain.connect(this.masterGain);
-    osc.start();
-    osc.stop(this.ctx.currentTime + 0.1);
-  }
-}
-
-// --- SHADER: ADVANCED VOLUMETRIC HOLOGRAM ---
-const HologramMaterial = {
-  uniforms: {
-    uTime: { value: 0 },
-    uColor: { value: new THREE.Color('#00ffff') },
-    uGlitchStrength: { value: 0 },
-  },
-  vertexShader: `
-    varying vec3 vNormal;
-    varying vec3 vPosition;
-    varying vec2 vUv;
-    uniform float uTime;
-    uniform float uGlitchStrength;
-    
-    // Simplex noise for vertex displacement
-    vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-    vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-    vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
-    float snoise(vec2 v) {
-      const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
-      vec2 i  = floor(v + dot(v, C.yy) );
-      vec2 x0 = v -   i + dot(i, C.xx);
-      vec2 i1;
-      i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-      vec4 x12 = x0.xyxy + C.xxzz;
-      x12.xy -= i1;
-      i = mod289(i);
-      vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 )) + i.x + vec3(0.0, i1.x, 1.0 ));
-      vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
-      m = m*m ;
-      m = m*m ;
-      vec3 x = 2.0 * fract(p * C.www) - 1.0;
-      vec3 h = abs(x) - 0.5;
-      vec3 ox = floor(x + 0.5);
-      vec3 a0 = x - ox;
-      m *= 1.79284291400159 - 0.85373472095314 * ( a0*a0 + h*h );
-      vec3 g;
-      g.x  = a0.x  * x0.x  + h.x  * x0.y;
-      g.yz = a0.yz * x12.xz + h.yz * x12.yw;
-      return 130.0 * dot(m, g);
-    }
-
-    void main() {
-      vNormal = normalize(normalMatrix * normal);
-      vPosition = position;
-      vUv = uv;
-      
-      vec3 pos = position;
-      
-      // Glitch displacement
-      float noiseVal = snoise(vec2(pos.y * 5.0, uTime * 2.0));
-      pos.x += noiseVal * uGlitchStrength * 0.1;
-      pos.z += noiseVal * uGlitchStrength * 0.05;
-      
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-    }
-  `,
-  fragmentShader: `
-    uniform vec3 uColor;
-    uniform float uTime;
-    varying vec3 vNormal;
-    varying vec3 vPosition;
-    varying vec2 vUv;
-    
-    void main() {
-      // Fresnel Rim Light
-      vec3 viewDir = normalize(cameraPosition - vPosition);
-      float fresnel = pow(1.0 - dot(viewDir, vNormal), 2.0);
-      
-      // Digital Scanlines
-      float scanline = sin(vPosition.y * 80.0 - uTime * 10.0) * 0.5 + 0.5;
-      float grid = step(0.95, fract(vUv.x * 20.0)) + step(0.95, fract(vUv.y * 20.0));
-      
-      // Deep Data Noise
-      float noise = fract(sin(dot(vUv, vec2(12.9898, 78.233))) * 43758.5453);
-      
-      // Composition
-      vec3 glowColor = uColor * (fresnel * 2.0);
-      vec3 gridColor = vec3(1.0) * grid * 0.2;
-      vec3 finalColor = glowColor + gridColor;
-      
-      // Pulse alpha
-      float alpha = fresnel * 0.9 + (scanline * 0.1);
-      alpha *= 0.8 + (sin(uTime * 3.0) * 0.1);
-      
-      gl_FragColor = vec4(finalColor, alpha);
-    }
-  `
+// --- EMOTION PALETTES ---
+const MOODS = {
+  neutral: { bg: "#0f172a", light: "#38bdf8", fog: "#1e293b", distortion: 0.4, speed: 1 },
+  calm: { bg: "#0c4a6e", light: "#7dd3fc", fog: "#075985", distortion: 0.2, speed: 0.5 },
+  fear: { bg: "#450a0a", light: "#f87171", fog: "#2a0404", distortion: 1.2, speed: 3 },
+  frustrated: { bg: "#431407", light: "#fb923c", fog: "#290d04", distortion: 0.8, speed: 2 },
+  excitement: { bg: "#4a044e", light: "#e879f9", fog: "#39033b", distortion: 0.6, speed: 1.5 }
 };
 
-// --- COMPONENT: MEMORY SHARDS (Floating Geometry) ---
-function MemoryShards({ count = 15, mood }) {
-  const mesh = useRef();
-  const dummy = useMemo(() => new THREE.Object3D(), []);
+/**
+ * --- API HELPERS ---
+ */
+const callGeminiText = async (apiKey, history, message) => {
+  const cleanKey = (apiKey || "").trim();
+  if (!cleanKey) throw new Error("No API key");
   
-  const particles = useMemo(() => {
-    return new Array(count).fill().map(() => ({
-      position: [
-        (Math.random() - 0.5) * 15,
-        (Math.random() - 0.5) * 15,
-        (Math.random() - 0.5) * 10
-      ],
-      rotation: [Math.random() * Math.PI, Math.random() * Math.PI, 0],
-      scale: Math.random() * 0.5 + 0.2,
-      speed: Math.random() * 0.2,
-    }));
-  }, [count]);
-
-  useFrame((state) => {
-    if (!mesh.current) return;
-    
-    particles.forEach((particle, i) => {
-      const { position, rotation, scale, speed } = particle;
-      
-      // Orbit Logic
-      const t = state.clock.elapsedTime * speed;
-      
-      dummy.position.set(
-        position[0] + Math.sin(t) * 0.5,
-        position[1] + Math.cos(t * 0.8) * 0.5,
-        position[2]
-      );
-      dummy.rotation.set(
-        rotation[0] + t,
-        rotation[1] + t * 0.5,
-        rotation[2]
-      );
-      dummy.scale.setScalar(scale);
-      dummy.updateMatrix();
-      
-      mesh.current.setMatrixAt(i, dummy.matrix);
-    });
-    mesh.current.instanceMatrix.needsUpdate = true;
+  const prompt = {
+    contents: [
+      ...(history || []).map((h) => ({ role: h.role === "user" ? "user" : "model", parts: [{ text: h.content }] })),
+      { role: "user", parts: [{ text: message }] }
+    ],
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    generationConfig: { maxOutputTokens: 100, temperature: 1.3 }
+  };
+  
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(cleanKey)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(prompt)
   });
+  
+  if (!res.ok) {
+     const err = await res.json();
+     throw new Error(err.error?.message || "Gemini API Error");
+  }
+  return (await res.json())?.candidates?.[0]?.content?.parts?.[0]?.text || "I am listening...";
+};
 
-  return (
-    <instancedMesh ref={mesh} args={[null, null, count]}>
-      <octahedronGeometry args={[1, 0]} />
-      <meshPhysicalMaterial 
-        color={mood === 'fear' ? '#500' : '#88c'} 
-        roughness={0}
-        metalness={0.8}
-        transmission={0.6}
-        thickness={2}
-        wireframe={true}
-      />
-    </instancedMesh>
-  );
-}
+const callGoogleTTS = async (apiKey, text, mood) => {
+  const cleanKey = (apiKey || "").trim();
+  if (!cleanKey) throw new Error("No Key");
+  
+  // Adjust pitch/speed based on mood
+  let pitch = 2.0;
+  let rate = 0.95;
+  if (mood === 'fear') { pitch = 0.8; rate = 1.1; }
+  if (mood === 'excitement') { pitch = 2.4; rate = 1.1; }
 
-// --- COMPONENT: THE ENTITY ---
-function Entity({ mood, isTalking, entropy }) {
-  const { scene, animations } = useGLTF("https://cdn.jsdelivr.net/gh/mrdoob/three.js@master/examples/models/gltf/RobotExpressive/RobotExpressive.glb");
-  const mixer = useRef();
-  const materialRef = useRef();
+  const payload = {
+    input: { text: text },
+    voice: { languageCode: "en-US", name: "en-US-Journey-F" }, 
+    audioConfig: { audioEncoding: "MP3", speakingRate: rate, pitch: pitch } 
+  };
+  
+  const res = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(cleanKey)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+  });
+  
+  if (!res.ok) throw new Error("Google TTS Failed");
+  const data = await res.json();
+  const binaryString = window.atob(data.audioContent);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes.buffer], { type: "audio/mpeg" }));
+};
 
-  const moodColor = useMemo(() => {
-    switch (mood) {
-      case 'fear': return '#ff0000'; 
-      case 'joy': return '#ffaa00';
-      case 'sadness': return '#4b0082';
-      default: return '#00ffff';
-    }
-  }, [mood]);
+const speakNativeBrowser = (text, onEnd) => {
+  if (!window.speechSynthesis) return;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.pitch = 1.4;
+  utterance.onend = onEnd;
+  window.speechSynthesis.speak(utterance);
+};
 
-  useEffect(() => {
-    if (animations.length) {
-      mixer.current = new THREE.AnimationMixer(scene);
-      const animationName = mood === 'joy' ? 'Dance' : (isTalking ? 'Jump' : 'Idle');
-      const clip = animations.find(c => c.name === animationName) || animations[0];
-      const action = mixer.current.clipAction(clip);
-      action.reset().fadeIn(0.5).play();
-      
-      return () => action.fadeOut(0.5);
-    }
-  }, [animations, mood, isTalking]);
+// Analyze basic sentiment locally to switch background faster
+const analyzeSentiment = (text) => {
+    const t = text.toLowerCase();
+    if (t.match(/(scared|dark|nightmare|run|shadow|fear)/)) return 'fear';
+    if (t.match(/(angry|stuck|annoyed|why|hate|broken)/)) return 'frustrated';
+    if (t.match(/(wow|yay|love|amazing|fly|magic|star)/)) return 'excitement';
+    if (t.match(/(calm|sleep|peace|quiet|rest|hello)/)) return 'calm';
+    return 'neutral';
+};
 
-  // Apply custom shader
-  useEffect(() => {
-    scene.traverse((child) => {
-      if (child.isMesh) {
-        child.material = new THREE.ShaderMaterial({
-          ...HologramMaterial,
-          transparent: true,
-          side: THREE.DoubleSide,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-        });
-        materialRef.current = child.material;
-      }
-    });
-  }, [scene]);
-
+/**
+ * --- 3D BACKGROUND COMPONENT ---
+ */
+function DreamAtmosphere({ mood }) {
+  const currentMood = MOODS[mood] || MOODS.neutral;
+  const mesh = useRef();
+  
   useFrame((state, delta) => {
-    if (mixer.current) mixer.current.update(delta);
-    
-    if (materialRef.current) {
-      materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
-      materialRef.current.uniforms.uColor.value.lerp(new THREE.Color(moodColor), 0.05);
-      // Glitch increases with entropy
-      materialRef.current.uniforms.uGlitchStrength.value = THREE.MathUtils.lerp(
-        materialRef.current.uniforms.uGlitchStrength.value,
-        isTalking ? 0.5 + entropy : entropy * 0.2,
-        0.1
-      );
+    if (mesh.current) {
+        mesh.current.rotation.x += delta * 0.1;
+        mesh.current.rotation.y += delta * 0.15;
     }
+    // Smooth background color transition
+    state.scene.background = new THREE.Color(currentMood.bg);
+    state.scene.fog = new THREE.FogExp2(currentMood.fog, 0.02);
   });
 
   return (
     <group>
-      <primitive object={scene} scale={0.5} position={[0, -1.5, 0]} />
-      {/* Energy Core Light */}
-      <pointLight 
-        position={[0, 0, 0.5]} 
-        color={moodColor} 
-        intensity={2} 
-        distance={3} 
-        decay={2} 
-      />
+      {/* Dynamic light color */}
+      <directionalLight position={[5, 5, 5]} intensity={1.5} color={currentMood.light} />
+      <pointLight position={[-5, -5, -5]} intensity={1} color={currentMood.light} />
+      
+      {/* Fluid Orb Background */}
+      <Sphere ref={mesh} args={[10, 64, 64]} position={[0, 0, -10]} scale={2}>
+         <MeshDistortMaterial 
+            color={currentMood.light} 
+            attach="material" 
+            distort={currentMood.distortion} 
+            speed={currentMood.speed} 
+            roughness={0.2} 
+            transparent 
+            opacity={0.3} 
+         />
+      </Sphere>
+
+      <Stars radius={100} depth={50} count={3000} factor={4} saturation={0} fade speed={1} />
+      <DreiSparkles count={100} scale={12} size={2} speed={0.4} opacity={0.5} color={currentMood.light} />
     </group>
   );
 }
 
-// --- MAIN SYSTEM CONTROLLER ---
-export default function DreamSystem() {
-  const [input, setInput] = useState('');
-  const [response, setResponse] = useState("SYSTEM_BOOT... FRAGMENTED_MEMORY_LOADED.");
-  const [mood, setMood] = useState('neutral');
-  const [decay, setDecay] = useState(0); 
-  const [isTalking, setIsTalking] = useState(false);
-  const [isFocused, setIsFocused] = useState(false);
-  const [history, setHistory] = useState([]); // Memory Fragments
-
-  const audioEngine = useRef(null);
+/**
+ * --- VRM AVATAR CONTROLLER ---
+ */
+function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
+  const { scene } = useThree();
+  const gltf = useLoader(GLTFLoader, url, loader => loader.register(parser => new VRMLoaderPlugin(parser)));
 
   useEffect(() => {
-    audioEngine.current = new AudioEngine();
+    const vrm = gltf.userData.vrm;
+    if (!vrm) return;
+    VRMUtils.combineSkeletons(vrm.scene);
+    
+    // Fix transparency
+    vrm.scene.traverse(o => {
+        if(o.isMesh && o.material) {
+            o.material.transparent = true;
+            o.material.alphaTest = 0.5;
+            o.material.depthWrite = true;
+        }
+    });
+
+    // Initial Neutral Pose (Hands Down)
+    const lArm = vrm.humanoid.getRawBoneNode("leftUpperArm");
+    const rArm = vrm.humanoid.getRawBoneNode("rightUpperArm");
+    if (lArm) lArm.rotation.z = Math.PI / 2.3; // Approx 80 degrees down
+    if (rArm) rArm.rotation.z = -Math.PI / 2.3;
+
+    vrm.scene.rotation.y = Math.PI;
+    vrm.scene.position.set(0, -1.3, 0);
+
+    scene.add(vrm.scene);
+    setVrmRef(vrm);
+    if (onLoaded) onLoaded(vrm);
+
+    return () => {
+      scene.remove(vrm.scene);
+      VRMUtils.deepDispose(vrm.scene);
+    };
+  }, [gltf, scene, setVrmRef, onLoaded]);
+
+  // Procedural Animation Loop
+  useFrame(({ clock }) => {
+    const vrm = gltf.userData.vrm;
+    if (!vrm) return;
+    vrm.update(clock.getDelta());
+    const t = clock.getElapsedTime();
+
+    // 1. Base Idle (Breathing)
+    const spine = vrm.humanoid.getRawBoneNode("spine");
+    if(spine) {
+        spine.rotation.x = Math.sin(t) * 0.05;
+        spine.rotation.y = Math.sin(t * 0.5) * 0.05;
+    }
+
+    // 2. Dynamic Movements based on State
+    const hips = vrm.humanoid.getRawBoneNode("hips");
+    const lArm = vrm.humanoid.getRawBoneNode("leftUpperArm");
+    const rArm = vrm.humanoid.getRawBoneNode("rightUpperArm");
+    const lHand = vrm.humanoid.getRawBoneNode("leftHand");
+    const rHand = vrm.humanoid.getRawBoneNode("rightHand");
+
+    if (isSpeaking) {
+        // WALKING / FLOATING MOVEMENT
+        if(hips) {
+            hips.position.y = Math.sin(t * 8) * 0.02; // Bobbing up and down
+            hips.rotation.y = Math.sin(t * 2) * 0.05; // Twisting hips
+        }
+
+        // EXPRESSIVE HAND GESTURES
+        // Lift arms slightly
+        if(lArm) lArm.rotation.z = THREE.MathUtils.lerp(lArm.rotation.z, (Math.PI / 3) + Math.sin(t * 3) * 0.1, 0.1);
+        if(rArm) rArm.rotation.z = THREE.MathUtils.lerp(rArm.rotation.z, -(Math.PI / 3) - Math.cos(t * 3) * 0.1, 0.1);
+        
+        // Hand articulation
+        if(lHand) lHand.rotation.x = Math.sin(t * 5) * 0.3;
+        if(rHand) rHand.rotation.x = Math.cos(t * 5) * 0.3;
+
+    } else {
+        // RETURN TO IDLE (Hands Down)
+        if(hips) hips.position.y = THREE.MathUtils.lerp(hips.position.y, 0, 0.1);
+        
+        // Smoothly lower arms
+        if(lArm) lArm.rotation.z = THREE.MathUtils.lerp(lArm.rotation.z, Math.PI / 2.3, 0.05);
+        if(rArm) rArm.rotation.z = THREE.MathUtils.lerp(rArm.rotation.z, -Math.PI / 2.3, 0.05);
+        
+        if(lHand) lHand.rotation.x = THREE.MathUtils.lerp(lHand.rotation.x, 0, 0.1);
+        if(rHand) rHand.rotation.x = THREE.MathUtils.lerp(rHand.rotation.x, 0, 0.1);
+    }
+  });
+
+  return null;
+}
+
+/**
+ * --- FACE & LIP SYNC CONTROLLER ---
+ */
+function FaceController({ vrm, analyser, mood }) {
+    const { mouse } = useThree();
+    
+    useFrame(() => {
+        if(!vrm) return;
+
+        // Head Look
+        const head = vrm.humanoid?.getRawBoneNode("head");
+        if(head) {
+            head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, mouse.x * 0.5, 0.08);
+            head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, mouse.y * 0.2, 0.08);
+        }
+
+        // Blinking
+        if(Math.random() < 0.005) {
+            vrm.expressionManager.setValue('blink', 1);
+            setTimeout(() => vrm.expressionManager.setValue('blink', 0), 150);
+        }
+
+        // Emotion Expression
+        const mgr = vrm.expressionManager;
+        mgr.setValue('happy', 0);
+        mgr.setValue('angry', 0);
+        mgr.setValue('sad', 0);
+        mgr.setValue('surprised', 0);
+
+        if(mood === 'excitement' || mood === 'calm') mgr.setValue('happy', 0.4);
+        if(mood === 'fear') mgr.setValue('surprised', 0.5);
+        if(mood === 'frustrated') mgr.setValue('angry', 0.4);
+
+        // Lip Sync
+        if(analyser) {
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteTimeDomainData(data);
+            let sum = 0;
+            for(let i=0; i<data.length; i++) {
+                const v = (data[i] - 128) / 128;
+                sum += v*v;
+            }
+            const vol = Math.sqrt(sum / data.length);
+            const open = THREE.MathUtils.clamp(vol * 20, 0, 1);
+            
+            mgr.setValue('aa', open);
+            mgr.setValue('ih', open * 0.5);
+            mgr.setValue('oh', open * 0.3);
+        } else {
+            mgr.setValue('aa', 0);
+        }
+    });
+    return null;
+}
+
+/**
+ * --- MAIN APPLICATION ---
+ */
+export default function DreamApp() {
+  const [mounted, setMounted] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [vrmRef, setVrmRef] = useState(null);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [status, setStatus] = useState("Click to Enter Dream");
+  const [audioReady, setAudioReady] = useState(false);
+  const [mood, setMood] = useState('neutral');
+
+  const audioContextRef = useRef(null);
+  const audioElementRef = useRef(null);
+  const analyserRef = useRef(null);
+  const historyRef = useRef([]);
+
+  useEffect(() => {
+    setMounted(true);
+    const stored = localStorage.getItem("dreamApiKey");
+    if(stored) try { setApiKey(JSON.parse(stored)); } catch {}
   }, []);
 
-  const speak = (text) => {
-    if (typeof window === 'undefined') return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
+  const initAudio = useCallback(() => {
+    if(audioContextRef.current) return;
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioContext();
+    const audio = new Audio();
+    audio.crossOrigin = "anonymous";
     
-    // Select Voice
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(v => v.name.includes("Google US English") || v.name.includes("Zira"));
-    if (preferred) u.voice = preferred;
+    const source = ctx.createMediaElementSource(audio);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    analyser.connect(ctx.destination);
+    
+    audioContextRef.current = ctx;
+    audioElementRef.current = audio;
+    analyserRef.current = analyser;
+    setAudioReady(true);
+    setStatus("Idle");
+  }, []);
 
-    u.pitch = mood === 'fear' ? 0.6 : (mood === 'joy' ? 1.2 : 1.0);
-    u.rate = 0.95;
+  const handleSpeak = useCallback(async (text) => {
+    if(!apiKey) return;
+    if(!audioContextRef.current) initAudio();
+    if(audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
+
+    // 1. Detect Mood Immediately
+    const detectedMood = analyzeSentiment(text);
+    setMood(detectedMood);
     
-    u.onstart = () => setIsTalking(true);
-    u.onend = () => setIsTalking(false);
-    window.speechSynthesis.speak(u);
+    setStatus("Thinking...");
+    setIsSpeaking(true);
+    historyRef.current.push({ role: "user", content: text });
+
+    try {
+      // 2. Get Text
+      const reply = await callGeminiText(apiKey, historyRef.current, text);
+      historyRef.current.push({ role: "model", content: reply });
+      setStatus("Whispering...");
+
+      // 3. Get Audio
+      try {
+          const audioUrl = await callGoogleTTS(apiKey, reply, detectedMood);
+          if(audioUrl && audioElementRef.current) {
+             const audio = audioElementRef.current;
+             audio.src = audioUrl;
+             audio.oncanplay = async () => {
+                 try { await audio.play(); } catch(e) { console.error(e); }
+             };
+             audio.onended = () => { setIsSpeaking(false); setStatus("Idle"); };
+          }
+      } catch (e) {
+          console.warn("Fallback TTS");
+          speakNativeBrowser(reply, () => { setIsSpeaking(false); setStatus("Idle"); });
+      }
+    } catch(e) {
+        console.error(e);
+        setStatus("Error");
+        setIsSpeaking(false);
+    }
+  }, [apiKey, initAudio]);
+
+  const startListening = () => {
+    if(!audioContextRef.current) initAudio();
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if(!Rec) { handleSpeak("Hello."); return; }
+    const r = new Rec();
+    r.onstart = () => setStatus("Listening...");
+    r.onresult = (e) => handleSpeak(e.results[0][0].transcript);
+    r.start();
   };
 
-  const analyze = (text) => {
-    const t = text.toLowerCase();
-    if (t.includes('fear') || t.includes('dark') || t.includes('scared') || t.includes('nightmare')) return 'fear';
-    if (t.includes('joy') || t.includes('happy') || t.includes('light') || t.includes('love')) return 'joy';
-    if (t.includes('sad') || t.includes('cry') || t.includes('lonely') || t.includes('lost')) return 'sadness';
-    return 'neutral';
-  };
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-    
-    const newMood = analyze(input);
-    setMood(newMood);
-    audioEngine.current?.playBlip();
-    audioEngine.current?.playChord(newMood);
-
-    // Dynamic Story Generation
-    let reply = "The static is too loud...";
-    if (newMood === 'fear') reply = "I sense the void approaching. Hold onto the light.";
-    else if (newMood === 'joy') reply = "This frequency... it feels like waking up.";
-    else if (newMood === 'sadness') reply = "Tears are just data leaking from the soul.";
-    else reply = "Processing new memory fragment. Integration complete.";
-
-    setResponse("");
-    typewriter(reply);
-    speak(reply);
-    
-    // Add to history (Memory Shards)
-    setHistory(prev => [...prev.slice(-4), { text: input, mood: newMood, id: Date.now() }]);
-    setInput("");
-    
-    // Increase system entropy
-    setDecay(prev => Math.min(prev + 0.1, 1.0)); 
-  };
-
-  const typewriter = (text) => {
-    let i = 0;
-    const interval = setInterval(() => {
-      // 5% chance to insert a random glitch character
-      const char = Math.random() > 0.95 ? "#" : text.charAt(i);
-      setResponse(text.substring(0, i) + char);
-      
-      if (char === text.charAt(i)) i++;
-      if (i > text.length) clearInterval(interval);
-    }, 35);
-  };
+  if(!mounted) return <div className="h-screen w-full bg-black flex items-center justify-center text-white">Loading...</div>;
 
   return (
-    <div className="relative w-full h-screen bg-black overflow-hidden font-mono selection:bg-cyan-500/30">
-      
-      {/* --- 3D VIEWPORT --- */}
-      <Canvas dpr={[1, 2]}>
-        <PerspectiveCamera makeDefault position={[0, 0, 6]} fov={45} />
-        
-        <Suspense fallback={null}>
-          <Environment preset="city" />
-          <ambientLight intensity={0.2} />
-
-          {/* Drifting Camera */}
-          <Float speed={1.5} rotationIntensity={0.2} floatIntensity={0.2}>
-            <Entity mood={mood} isTalking={isTalking} entropy={decay} />
-          </Float>
-
-          {/* Procedural Environment */}
-          <MemoryShards count={30} mood={mood} />
-          <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
-          
-          {/* Volumetric Atmosphere */}
-          <Cloud position={[-8, -2, -10]} speed={0.2} opacity={0.2} />
-          <Cloud position={[8, 2, -10]} speed={0.2} opacity={0.2} />
-
-          {/* Cinematic Post-Processing */}
-          <EffectComposer disableNormalPass>
-            <Bloom luminanceThreshold={0.2} luminanceSmoothing={0.9} height={300} intensity={1.2} />
-            <Noise opacity={0.05 + (decay * 0.1)} />
-            <Vignette eskil={false} offset={0.1} darkness={1.1} />
-            {/* Chromatic Aberration spikes when talking */}
-            <ChromaticAberration 
-              offset={[
-                THREE.MathUtils.lerp(0.001, 0.01, isTalking ? 1 : 0), 
-                THREE.MathUtils.lerp(0.001, 0.005, isTalking ? 1 : 0)
-              ]} 
-            />
-            {decay > 0.5 && <Glitch delay={[1.5, 3.5]} duration={[0.6, 1.0]} strength={[0.3, 1.0]} mode={GlitchMode.SPORADIC} />}
-            <Scanline density={1.5} opacity={0.1} />
-          </EffectComposer>
-        </Suspense>
+    <div className="relative w-full h-screen overflow-hidden text-white font-sans transition-colors duration-1000"
+         style={{ backgroundColor: MOODS[mood].bg }}
+         onClick={() => !audioReady && initAudio()}
+    >
+      <Canvas camera={{ position: [0, 1.25, 3.5], fov: 30 }}>
+         <DreamAtmosphere mood={mood} />
+         <Suspense fallback={<Html center><div className="animate-pulse">Summoning...</div></Html>}>
+            <Avatar url={VRM_URL} setVrmRef={setVrmRef} isSpeaking={isSpeaking} mood={mood} />
+            {vrmRef && <FaceController vrm={vrmRef} analyser={analyserRef.current} mood={mood} />}
+         </Suspense>
+         <OrbitControls enablePan={false} enableZoom={false} maxPolarAngle={Math.PI/2} minPolarAngle={Math.PI/2.5} />
       </Canvas>
 
-      {/* --- HUD LAYER --- */}
-      <div className="absolute inset-0 pointer-events-none p-8 flex flex-col justify-between z-10">
-        
-        {/* Top Bar */}
-        <div className="flex justify-between items-start text-xs text-white/40 tracking-[0.2em]">
-          <div className="flex flex-col gap-1">
-            <span>NEURAL_LINK: <span className={mood === 'fear' ? 'text-red-500' : 'text-cyan-400'}>CONNECTED</span></span>
-            <span>LATENCY: {Math.floor(Math.random() * 20) + 10}ms</span>
-          </div>
-          <div className="text-right">
-             <div>ENTROPY: {(decay * 100).toFixed(1)}%</div>
-             <div>ID: {Date.now().toString(16).toUpperCase()}</div>
-          </div>
+      {/* --- ORGANIC UI --- */}
+      <motion.div 
+         initial={{ y: 50, opacity: 0 }} 
+         animate={{ y: 0, opacity: 1 }} 
+         className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50 w-full max-w-md p-6"
+      >
+        <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-[2rem] p-6 shadow-2xl transition-colors duration-500"
+             style={{ borderColor: MOODS[mood].light + "40" }}>
+            
+            <div className="text-center mb-4 text-xs font-bold tracking-[0.2em] uppercase flex items-center justify-center gap-2" 
+                 style={{ color: MOODS[mood].light }}>
+                {isSpeaking && <Sparkles className="animate-spin w-3 h-3"/>}
+                {status}
+            </div>
+
+            {!apiKey ? (
+                <div className="space-y-2">
+                    <input type="password" placeholder="Google Cloud API Key" 
+                        className="w-full bg-transparent border-b border-white/20 pb-2 text-center focus:outline-none placeholder:text-white/30"
+                        onChange={e => { setApiKey(e.target.value); localStorage.setItem("dreamApiKey", JSON.stringify(e.target.value)); }} />
+                    <div className="text-[10px] text-center opacity-50">Cloud TTS + Generative Language API</div>
+                </div>
+            ) : !audioReady ? (
+                <button onClick={initAudio} className="w-full py-4 bg-white/10 hover:bg-white/20 rounded-full font-bold flex items-center justify-center gap-2 transition">
+                    <Play size={16}/> Enter Dream
+                </button>
+            ) : (
+                <div className="flex gap-4">
+                    <button onClick={startListening} className="flex-1 h-14 bg-gradient-to-r from-indigo-500/50 to-purple-500/50 rounded-full flex items-center justify-center hover:scale-105 transition shadow-lg">
+                        <Mic size={20} />
+                    </button>
+                    <button onClick={() => handleSpeak("I feel a storm coming...")} className="px-6 rounded-full border border-white/20 hover:bg-white/10 text-xs">
+                        Fear Test
+                    </button>
+                    <button onClick={() => handleSpeak("I am so happy to see the stars!")} className="px-6 rounded-full border border-white/20 hover:bg-white/10 text-xs">
+                        Joy Test
+                    </button>
+                </div>
+            )}
         </div>
-
-        {/* Center Interaction Area */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-3xl flex flex-col items-center">
-          
-          <AnimatePresence mode="wait">
-            <motion.div 
-              key={response}
-              initial={{ opacity: 0, scale: 0.95, filter: "blur(10px)" }}
-              animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-              exit={{ opacity: 0, scale: 1.05, filter: "blur(10px)" }}
-              className="text-center mb-16 px-4"
-            >
-              <h1 className="text-3xl md:text-6xl font-extralight text-white/90 drop-shadow-[0_0_30px_rgba(255,255,255,0.4)] leading-tight">
-                {response}
-              </h1>
-            </motion.div>
-          </AnimatePresence>
-
-          {/* Liquid Glass Input */}
-          <motion.form 
-            initial={{ opacity: 0, y: 100 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.5 }}
-            onSubmit={handleSubmit}
-            className="pointer-events-auto w-full max-w-lg relative group"
-          >
-            <motion.div
-              animate={{
-                borderRadius: isFocused 
-                  ? ["10px", "10px", "10px"] 
-                  : ["40% 60% 70% 30% / 40% 50% 60% 50%", "60% 40% 30% 70% / 60% 30% 70% 40%", "40% 60% 70% 30% / 40% 50% 60% 50%"],
-                boxShadow: isFocused 
-                  ? `0 0 50px ${mood === 'fear' ? 'rgba(255,0,0,0.3)' : 'rgba(0,255,255,0.3)'}` 
-                  : "0 0 0px rgba(0,0,0,0)"
-              }}
-              transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-              className="absolute inset-0 bg-white/5 backdrop-blur-xl border border-white/10"
-            />
-            <input 
-              type="text" 
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
-              placeholder="Inject data..."
-              className="relative z-10 w-full bg-transparent p-6 text-center text-xl text-white placeholder-white/20 focus:outline-none font-light tracking-widest uppercase"
-            />
-          </motion.form>
-        </div>
-
-        {/* Memory Shards (History) */}
-        <div className="flex gap-4 items-end h-20 pointer-events-none">
-          {history.map((frag, i) => (
-            <motion.div 
-              key={frag.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 0.5, y: 0 }}
-              className="text-[10px] bg-white/5 p-2 border-l-2 border-white/20 max-w-[150px] truncate"
-            >
-              <span className="opacity-50">MEM_{i}:</span> {frag.text}
-            </motion.div>
-          ))}
-        </div>
-      </div>
-
-      {/* Vignette Overlay */}
-      <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,transparent_0%,black_120%)] z-0" />
+      </motion.div>
     </div>
   );
 }
