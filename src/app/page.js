@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useRef, useEffect, useState, useCallback, Suspense, useMemo } from "react";
+
 import { Canvas, useFrame, useThree, useLoader } from "@react-three/fiber";
 import { OrbitControls, Html, MeshDistortMaterial, Sphere, Stars, Sparkles as DreiSparkles, Float } from "@react-three/drei";
 import * as THREE from "three";
@@ -24,11 +25,11 @@ Style: Speak in friendly voice as if you are her friend. Max 2 sentences.
 
 // --- EMOTION PALETTES ---
 const MOODS = {
-  neutral: { color: "#a855f7", intensity: 0.5 }, // Purple
-  calm: { color: "#38bdf8", intensity: 0.3 },    // Cyan
-  fear: { color: "#ef4444", intensity: 0.8 },    // Red
-  frustrated: { color: "#f97316", intensity: 0.7 }, // Orange
-  excitement: { color: "#e879f9", intensity: 0.9 } // Pink
+  neutral: { color: "#a855f7", intensity: 0.5 },
+  calm: { color: "#38bdf8", intensity: 0.3 },
+  fear: { color: "#ef4444", intensity: 0.8 },
+  frustrated: { color: "#f97316", intensity: 0.7 },
+  excitement: { color: "#e879f9", intensity: 0.9 }
 };
 
 /**
@@ -57,31 +58,86 @@ const callGeminiText = async (apiKey, history, message) => {
   }
   return (await res.json())?.candidates?.[0]?.content?.parts?.[0]?.text || "I am listening...";
 };
-
 const callGoogleTTS = async (apiKey, text, mood) => {
   const cleanKey = (apiKey || "").trim();
   if (!cleanKey) throw new Error("No Key");
-  
-  let pitch = 2.0;
-  let rate = 0.95;
-  if (mood === 'fear') { pitch = 0.8; rate = 1.1; }
-  if (mood === 'excitement') { pitch = 2.4; rate = 1.1; }
+
+  // Base settings — fairy softness
+  let pitchVal = 3.5;  
+  let rateVal = 0.90;
+  let style = "soft";
+  let moodTag = "";
+
+  // Mood modifiers (SSML style + pitch/speed tuning)
+  if (mood === "fear") { 
+    pitchVal = 2.5;
+    rateVal = 0.97;
+    style = "whispered";
+    moodTag = `<break time="150ms"/>`;
+  }
+
+  if (mood === "excitement") {
+    pitchVal = 4.0;
+    rateVal = 1.08;
+    style = "lively";
+    moodTag = `<break time="80ms"/>`;
+  }
+
+  if (mood === "sad") {
+    pitchVal = 2.0;
+    rateVal = 0.82;
+    style = "sad";
+    moodTag = `<break time="200ms"/>`;
+  }
+
+  // SSML — adds breathiness + natural pauses + softer edges
+  const ssml = `
+    <speak>
+      <voice name="en-US-Neural2-F">
+        <prosody rate="${rateVal}" pitch="${pitchVal}st">
+          <amazon:effect name="soften">
+            ${moodTag}
+            ${text}
+          </amazon:effect>
+        </prosody>
+      </voice>
+    </speak>
+  `;
 
   const payload = {
-    input: { text: text },
-    voice: { languageCode: "en-US", name: "en-US-Journey-F" }, 
-    audioConfig: { audioEncoding: "MP3", speakingRate: rate, pitch: pitch } 
+    input: { ssml },
+    voice: {
+      languageCode: "en-US",
+      name: "en-US-Neural2-F"   // Soft, natural, expressive female voice
+    },
+    audioConfig: {
+      audioEncoding: "MP3",
+      speakingRate: rateVal,
+      pitch: pitchVal,
+      effectsProfileId: ["headphone-class-device"] // best clarity + warmth
+    }
   };
-  
-  const res = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(cleanKey)}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
-  });
-  
-  if (!res.ok) throw new Error("Google TTS Failed");
+
+  const res = await fetch(
+    `https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(cleanKey)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
+
+  if (!res.ok) {
+    const errorData = await res.json();
+    console.error("TTS Error:", errorData);
+    throw new Error("Google TTS Failed");
+  }
+
   const data = await res.json();
   const binaryString = window.atob(data.audioContent);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+
   return URL.createObjectURL(new Blob([bytes.buffer], { type: "audio/mpeg" }));
 };
 
@@ -117,7 +173,6 @@ function DreamAtmosphere({ mood }) {
       <Stars radius={100} depth={50} count={3000} factor={4} saturation={0} fade speed={1} />
       <DreiSparkles count={150} scale={15} size={3} speed={0.4} opacity={0.5} color={currentMood.color} />
       
-      {/* Floating Orbs for "Dream" feel */}
       <Float speed={2} rotationIntensity={0.5} floatIntensity={1}>
         <Sphere args={[1, 32, 32]} position={[-3, 2, -5]}>
             <MeshDistortMaterial color={currentMood.color} speed={2} distort={0.5} transparent opacity={0.3} />
@@ -137,14 +192,14 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
   const { scene } = useThree();
   const gltf = useLoader(GLTFLoader, url, loader => loader.register(parser => new VRMLoaderPlugin(parser)));
   
-  // INDEPENDENT STATE: We track animation values separate from bones
-  // This prevents the VRM T-Pose reset from killing our animation
+  // INDEPENDENT STATE
   const animState = useRef({
-      armRot: 1.3, // Starts arms DOWN (A-Pose)
+      armRotL: 1.3, armRotR: 1.3,
       foreArmRot: 0.1,
       handRot: 0,
       hipBob: 0,
-      hipTwist: 0
+      hipTwist: 0,
+      breath: 0
   });
 
   useEffect(() => {
@@ -152,7 +207,6 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     if (!vrm) return;
     VRMUtils.combineSkeletons(vrm.scene);
     
-    // Fix transparency
     vrm.scene.traverse(o => {
         if(o.isMesh && o.material) {
             o.material.transparent = true;
@@ -162,7 +216,7 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     });
 
     vrm.scene.rotation.y = Math.PI;
-    vrm.scene.position.set(0, 0.2, -0.1);
+    vrm.scene.position.set(0, 0.3, 0);
 
     scene.add(vrm.scene);
     setVrmRef(vrm);
@@ -174,16 +228,28 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     };
   }, [gltf, scene, setVrmRef, onLoaded]);
 
-  // --- PROCEDURAL ANIMATION ENGINE ---
+  // --- PROCEDURAL ANIMATION ENGINE (UPDATED) ---
+  const { camera } = useThree();  // <-- get R3F camera
+
   useFrame(({ clock }) => {
     const vrm = gltf.userData.vrm;
     if (!vrm) return;
     vrm.update(clock.getDelta());
     const t = clock.getElapsedTime();
 
+    // Helper: Composite Sine Waves for Organic Noise
+    // This creates non-repeating, smooth random movement
+    const organicNoise = (offset, speed = 1) => {
+        return Math.sin(t * speed + offset) * 0.5 + Math.sin(t * speed * 0.5 + offset * 2) * 0.3 + Math.sin(t * speed * 0.2 + offset) * 0.2;
+    };
+
+    const s = animState.current;
+    const lerp = THREE.MathUtils.lerp;
+
     // -- BONE REFERENCES --
     const hips = vrm.humanoid.getRawBoneNode("hips");
     const spine = vrm.humanoid.getRawBoneNode("spine");
+    const fov=vrm.fov
     const neck = vrm.humanoid.getRawBoneNode("neck");
     const lArm = vrm.humanoid.getRawBoneNode("leftUpperArm");
     const rArm = vrm.humanoid.getRawBoneNode("rightUpperArm");
@@ -194,58 +260,91 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     const lLeg = vrm.humanoid.getRawBoneNode("leftUpperLeg");
     const rLeg = vrm.humanoid.getRawBoneNode("rightUpperLeg");
 
-    const s = animState.current;
-    const lerp = THREE.MathUtils.lerp;
-
-    // 1. BREATHING (Always Active)
+    // 1. DEEP BREATHING (Spine & Neck)
     if(spine) {
-        spine.rotation.x = Math.sin(t * 2) * 0.04; 
-        spine.rotation.y = Math.sin(t * 0.7) * 0.03;
+        // Complex breathing rhythm
+        const breath = (Math.sin(t * 1.5) + Math.sin(t * 0.5)) * 0.02;
+        spine.rotation.x = breath; 
+        spine.rotation.y = organicNoise(0, 0.3) * 0.05; // Slow sway
+    }
+    if(neck) {
+        neck.rotation.y = organicNoise(5, 0.4) * 0.1; // Look around slowly
+        neck.rotation.x = Math.sin(t * 0.5) * 0.03;
     }
     
-    // 2. LEGS (Floating/Treading)
+    // 2. LEGS (Floating/Treading Air)
     if(lLeg && rLeg) {
-        lLeg.rotation.x = Math.sin(t * 2) * 0.1;
-        rLeg.rotation.x = -Math.sin(t * 2) * 0.1;
-        // Fix legs slightly apart
+        lLeg.rotation.x = Math.sin(t * 1.5) * 0.1;
+        rLeg.rotation.x = -Math.sin(t * 1.5) * 0.1;
         lLeg.rotation.z = 0.1;
         rLeg.rotation.z = -0.1;
     }
 
-    // 3. TARGET CALCULATIONS (Idle vs Speaking)
-    let targetArmRot, targetForeArm, targetHand, targetBob, targetTwist;
+    // 3. TARGET CALCULATIONS
+    let tArmL, tArmR, tForeArm, tHand, tBob, tTwist;
+
 
     if (isSpeaking) {
-        // SPEAKING: Active, hands up
-        targetArmRot = (Math.PI / 4) + Math.sin(t * 3) * 0.1; // Arms up ~45deg
-        targetForeArm = 0.5 + Math.sin(t * 4) * 0.1; // Elbows bent
-        targetHand = Math.sin(t * 8) * 0.3; // Hands flapping/talking
-        targetBob = Math.sin(t * 4) * 0.03 + 0.02;
-        targetTwist = Math.sin(t * 1.5) * 0.08;
-    } else {
-        // IDLE: Relaxed A-Pose
-        targetArmRot = 1.3 + Math.sin(t) * 0.03; // Arms down (~75deg)
-        targetForeArm = 0.1; // Slight bend
-        targetHand = 0;
-        targetBob = Math.sin(t * 2) * 0.01;
-        targetTwist = Math.sin(t * 0.5) * 0.02;
+      // Increase FOV while speaking so model stays in frame
+
+      // --- NATURAL HUMAN SPEAKING GESTURES ---
+      camera.fov = THREE.MathUtils.lerp(camera.fov, 55, 0.05);
+            camera.updateProjectionMatrix();
+  
+      // Large arm motion but comfortable range
+      tArmL = 0.8 + organicNoise(1, 3, 0.3); 
+      tArmR = -0.9 - organicNoise(2, 2.8, 0.3);
+  
+      // Forearm moves but NOT always synced (asymmetric)
+      tForeArm = 0.3 + Math.abs(organicNoise(3, 4, 0.4));
+  
+      // Fingers/hand rotate rapidly but softly
+      tHand = organicNoise(4, 10, 0.4);
+  
+      // Upper body lean reacts subtly like real speech
+      tBob = organicNoise(5, 1.5, 0.03) + Math.sin(t * 2) * 0.01;
+      tTwist = organicNoise(6, 1.2, 0.08);
+  
+      
+  
+      // Slight forward lean while talking (real humans do this)
+      if (spine) spine.rotation.x = -0.05 + organicNoise(9, 1, 0.02);
+  } 
+  else {
+        // --- IDLE (Organic, Random, Asymmetric) ---
+        camera.fov = THREE.MathUtils.lerp(camera.fov, 30, 0.05);
+            camera.updateProjectionMatrix();
+        // Asymmetric Arms: Left arm might sway more than right
+        tArmL = 1.3 + organicNoise(0.1, 0.5) * 0.05; 
+        tArmR = -1.3 - organicNoise(0.2, 0.6) * 0.05;
+        
+        // Elbows breathe slightly
+        tForeArm = 0.1 + Math.abs(Math.sin(t * 0.5)) * 0.5; 
+        
+        // Hands twitch subtly (micro-movements)
+        tHand = organicNoise(10, 2) * 0.5;
+        
+        // Weight shifting
+        tBob = Math.sin(t * 1) * 0.01;
+        tTwist = organicNoise(100, 0.2) * 0.3;
     }
 
-    // 4. SMOOTH INTERPOLATION (Update State)
-    s.armRot = lerp(s.armRot, targetArmRot, 0.05);
-    s.foreArmRot = lerp(s.foreArmRot, targetForeArm, 0.05);
-    s.handRot = lerp(s.handRot, targetHand, 0.1);
-    s.hipBob = lerp(s.hipBob, targetBob, 0.1);
-    s.hipTwist = lerp(s.hipTwist, targetTwist, 0.1);
+    // 4. SMOOTH INTERPOLATION
+    s.armRotL = lerp(s.armRotL, tArmL, 0.05);
+    s.armRotR = lerp(s.armRotR, tArmR, 0.05);
+    s.foreArmRot = lerp(s.foreArmRot, tForeArm, 0.05);
+    s.handRot = lerp(s.handRot, tHand, 0.1);
+    s.hipBob = lerp(s.hipBob, tBob, 0.4);
+    s.hipTwist = lerp(s.hipTwist, tTwist, 0.1);
 
-    // 5. APPLY TO BONES (Override T-Pose)
+    // 5. APPLY
     if(hips) {
         hips.position.y = s.hipBob;
         hips.rotation.y = s.hipTwist;
     }
     
-    if(lArm) lArm.rotation.z = s.armRot;
-    if(rArm) rArm.rotation.z = -s.armRot;
+    if(lArm) lArm.rotation.z = s.armRotL;
+    if(rArm) rArm.rotation.z = s.armRotR;
 
     if(lForeArm) lForeArm.rotation.z = s.foreArmRot;
     if(rForeArm) rForeArm.rotation.z = -s.foreArmRot;
