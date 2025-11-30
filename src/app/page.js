@@ -163,23 +163,36 @@ const callGoogleTTS = async (apiKey, text, mood) => {
   const cleanKey = (apiKey || "").trim();
   if (!cleanKey) throw new Error("No Key");
 
-  let pitchVal = 3.5;  
-  let rateVal = 0.90;
-  let style = "soft";
+  // --- ANIME KID SETTINGS ---
+  // Pitch: +12st (A full octave up - High & Squeaky)
+  // Rate: 1.2 (Fast & Energetic)
+  let pitchVal = "12st";  
+  let rateVal = "1.2";
   let moodTag = "";
 
-  if (mood === "fear") { pitchVal = 2.5; rateVal = 0.97; style = "whispered"; moodTag = `<break time="150ms"/>`; }
-  if (mood === "excitement" || mood === "happy") { pitchVal = 4.0; rateVal = 1.08; style = "lively"; moodTag = `<break time="80ms"/>`; }
-  if (mood === "sad") { pitchVal = 2.0; rateVal = 0.82; style = "sad"; moodTag = `<break time="200ms"/>`; }
+  // Mood Modifiers
+  if (mood === "fear") { 
+    pitchVal = "8st"; // Slightly lower, trembling
+    rateVal = "1.05"; // Slower, hesitant
+    moodTag = `<break time="150ms"/>`; 
+  }
+  if (mood === "excitement" || mood === "happy") { 
+    pitchVal = "14st"; // Ultra high
+    rateVal = "1.35"; // Super fast
+    moodTag = `<break time="50ms"/>`; 
+  }
+  if (mood === "sad") { 
+    pitchVal = "6st"; // Closer to normal, subdued
+    rateVal = "0.85"; // Very slow
+    moodTag = `<break time="300ms"/>`; 
+  }
 
   const ssml = `
     <speak>
       <voice name="en-US-Neural2-F">
-        <prosody rate="${rateVal}" pitch="${pitchVal}st">
-          <amazon:effect name="soften">
+        <prosody rate="${rateVal}" pitch="${pitchVal}" volume="soft">
             ${moodTag}
             ${text}
-          </amazon:effect>
         </prosody>
       </voice>
     </speak>
@@ -188,7 +201,12 @@ const callGoogleTTS = async (apiKey, text, mood) => {
   const payload = {
     input: { ssml },
     voice: { languageCode: "en-US", name: "en-US-Neural2-F" },
-    audioConfig: { audioEncoding: "MP3", speakingRate: rateVal, pitch: pitchVal, effectsProfileId: ["headphone-class-device"] }
+    // CRITICAL FIX: Removed 'pitch' and 'speakingRate' from here.
+    // We rely 100% on the SSML above to control the voice.
+    audioConfig: { 
+        audioEncoding: "MP3",
+        effectsProfileId: ["headphone-class-device"] 
+    }
   };
 
   const res = await fetch(
@@ -206,8 +224,38 @@ const callGoogleTTS = async (apiKey, text, mood) => {
 
 const speakNativeBrowser = (text, onEnd) => {
   if (!window.speechSynthesis) return;
+
+  // 1. Stop any previous speech immediately (prevents overlapping)
+  window.speechSynthesis.cancel();
+
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.pitch = 1.4;
+  
+  // --- SOOTHING FAIRY SETTINGS ---
+  
+  // Pitch: 1.1 is the "Sweet Spot". 
+  // Normal is 1.0. 1.5 is Chipmunk. 1.1 is Light/Feminine.
+  utterance.pitch = 1.5; 
+  
+  // Rate: 0.85 is "Dreamy/Calm".
+  // Normal is 1.0. Lowering this makes her speak gently and slowly.
+  utterance.rate = 0.95;  
+  
+  // Volume: Soften it slightly for a whisper-like effect
+  utterance.volume = 0.8;
+
+  // --- VOICE SELECTION ---
+  // We prioritize voices known to be softer/higher quality
+  const voices = window.speechSynthesis.getVoices();
+  
+  const preferredVoice = voices.find(v => 
+     v.name === "Google US English" || // Best quality on Chrome
+     v.name === "Samantha" ||          // Best quality on Mac
+     v.name === "Microsoft Zira Desktop" || // Best quality on Windows
+     (v.lang === "en-US" && v.name.includes("Female")) // Fallback
+  );
+
+  if (preferredVoice) utterance.voice = preferredVoice;
+
   utterance.onend = onEnd;
   window.speechSynthesis.speak(utterance);
 };
