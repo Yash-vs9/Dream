@@ -2,7 +2,8 @@
 
 import React, { useRef, useEffect, useState, useCallback, Suspense, useMemo } from "react";
 import { Canvas, useFrame, useThree, useLoader } from "@react-three/fiber";
-import { OrbitControls, Html, MeshDistortMaterial, Sphere, Stars, Sparkles as DreiSparkles, Float } from "@react-three/drei";
+import { OrbitControls, Html, MeshDistortMaterial, Sphere, Stars, Sparkles as DreiSparkles, Float, Torus, Icosahedron, Box } from "@react-three/drei";
+import { EffectComposer, Bloom, ChromaticAberration, Noise, Vignette } from "@react-three/postprocessing";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
@@ -22,31 +23,101 @@ Emotions: You reflect the user's emotion. If they are scared, be protective. If 
 Style: Speak in friendly voice as if you are her friend. Max 2 sentences.
 `;
 
-// --- EMOTION PALETTES (UPDATED) ---
 const MOODS = {
   neutral: { color: "#a855f7", intensity: 0.5, type: 'clear' },
   calm: { color: "#38bdf8", intensity: 0.3, type: 'clear' },
   fear: { color: "#ef4444", intensity: 0.8, type: 'clear' },
   frustrated: { color: "#f97316", intensity: 0.7, type: 'clear' },
   excitement: { color: "#e879f9", intensity: 0.9, type: 'flowers' },
-  // ADDED NEW MOODS
   happy: { color: "#f472b6", intensity: 0.8, type: 'flowers' },
   sad: { color: "#64748b", intensity: 0.4, type: 'rain' },
   confused: { color: "#a3a3a3", intensity: 0.5, type: 'blur' }
 };
 
 /**
- * --- WEATHER EFFECTS (NEW) ---
+ * --- NEW: FLOATING DREAM RELICS (Random Objects) ---
+ * These objects appear randomly and float in the background
+ */
+function FloatingRelics() {
+  // Create 5 random floating objects
+  const relics = useMemo(() => new Array(5).fill(0).map(() => ({
+    x: (Math.random() - 0.5) * 15,
+    y: (Math.random() - 0.5) * 10,
+    z: -5 - Math.random() * 10,
+    rotSpeed: Math.random() * 0.5,
+    scale: 0.5 + Math.random(),
+    type: Math.floor(Math.random() * 3) // 0: Torus, 1: Icosahedron, 2: Box
+  })), []);
+
+  return (
+    <group>
+      {relics.map((r, i) => (
+        <Float key={i} speed={r.rotSpeed + 1} rotationIntensity={2} floatIntensity={2}>
+          <mesh position={[r.x, r.y, r.z]} scale={[r.scale, r.scale, r.scale]}>
+            {r.type === 0 && <torusGeometry args={[0.5, 0.2, 16, 32]} />}
+            {r.type === 1 && <icosahedronGeometry args={[0.7, 0]} />}
+            {r.type === 2 && <boxGeometry args={[0.8, 0.8, 0.8]} />}
+            {/* Glass-like material */}
+            <meshPhysicalMaterial 
+              roughness={0.2} 
+              transmission={0.9} 
+              thickness={1} 
+              color="#ffffff" 
+              emissive="#a855f7"
+              emissiveIntensity={0.2}
+            />
+          </mesh>
+        </Float>
+      ))}
+    </group>
+  )
+}
+
+/**
+ * --- NEW: POST PROCESSING EFFECTS ---
+ * Creates the visual "dream lens"
+ */
+function DreamFX({ mood }) {
+  const { type } = MOODS[mood] || MOODS.neutral;
+  
+  // Dynamic Chromatic Aberration Ref
+  const caRef = useRef();
+  
+  useFrame((state) => {
+    if (caRef.current) {
+      // Makes the screen "split" colors rhythmically like a heartbeat or glitch
+      const t = state.clock.elapsedTime;
+      const shift = (Math.sin(t * 2) * 0.002) + (Math.random() * 0.001); 
+      caRef.current.offset.x = shift;
+      caRef.current.offset.y = shift;
+    }
+  });
+
+  return (
+    <EffectComposer disableNormalPass>
+      <Bloom luminanceThreshold={1} mipmapBlur intensity={1.5} radius={0.5} />
+      <ChromaticAberration 
+        ref={caRef}
+        offset={[0.002, 0.002]} // Initial offset
+        radialModulation={false}
+        modulationOffset={0}
+      />
+      <Noise opacity={0.05} />
+      <Vignette eskil={false} offset={0.1} darkness={0.5} />
+    </EffectComposer>
+  );
+}
+
+/**
+ * --- WEATHER EFFECTS (EXISTING) ---
  */
 function WeatherEffects({ mood }) {
     const { type } = MOODS[mood] || MOODS.neutral;
-    // Determine particle count based on mood type
     const count = (type === 'rain' ? 800 : (type === 'flowers' ? 150 : 0));
     
     const meshRef = useRef();
     const dummy = useMemo(() => new THREE.Object3D(), []);
 
-    // Generate random particle data
     const particles = useMemo(() => new Array(800).fill(0).map(() => ({
         x: (Math.random() - 0.5) * 20, y: Math.random() * 20, z: (Math.random() - 0.5) * 20,
         speed: Math.random() * 0.1 + 0.05, spin: Math.random() * 0.05, offset: Math.random() * 100
@@ -57,20 +128,17 @@ function WeatherEffects({ mood }) {
         particles.forEach((p, i) => {
             if (i >= count) return; 
 
-            // Physics Logic
             if (type === 'rain') {
-                p.y -= p.speed * 4; // Rain falls fast
+                p.y -= p.speed * 4;
             } else { 
-                p.y -= p.speed * 0.5; // Flowers float
+                p.y -= p.speed * 0.5; 
                 p.x += Math.sin(state.clock.elapsedTime + p.offset) * 0.01; 
             }
 
-            // Loop particles to top
             if (p.y < -5) { p.y = 10; p.x = (Math.random() - 0.5) * 20; }
             
             dummy.position.set(p.x, p.y, p.z);
             
-            // Visual Styles
             if (type === 'flowers') { 
                 dummy.rotation.x += p.spin; dummy.scale.set(0.3, 0.3, 0.3); 
             } else { 
@@ -96,9 +164,6 @@ function WeatherEffects({ mood }) {
     );
 }
 
-/**
- * --- API HELPERS (ORIGINAL PRESERVED) ---
- */
 const callGeminiText = async (apiKey, history, message) => {
   const cleanKey = (apiKey || "").trim();
   if (!cleanKey) throw new Error("No API key");
@@ -127,13 +192,11 @@ const callGoogleTTS = async (apiKey, text, mood) => {
   const cleanKey = (apiKey || "").trim();
   if (!cleanKey) throw new Error("No Key");
 
-  // Base settings — fairy softness
   let pitchVal = 3.5;  
   let rateVal = 0.90;
   let style = "soft";
   let moodTag = "";
 
-  // Mood modifiers
   if (mood === "fear") { 
     pitchVal = 2.5; rateVal = 0.97; style = "whispered"; moodTag = `<break time="150ms"/>`;
   }
@@ -197,18 +260,24 @@ const analyzeSentiment = (text) => {
 };
 
 /**
- * --- 3D BACKGROUND (UPDATED) ---
+ * --- 3D BACKGROUND (UPDATED FOR CHAOS) ---
  */
 function DreamAtmosphere({ mood }) {
   const currentMood = MOODS[mood] || MOODS.neutral;
-  
-  // ADDED: Camera Shake/Dizzy logic for Confused mood
+  const meshRef = useRef();
+
   useFrame((state) => {
+      // Camera wobble
       if (mood === 'confused') {
           const t = state.clock.elapsedTime;
           state.camera.rotation.z = THREE.MathUtils.lerp(state.camera.rotation.z, Math.sin(t * 0.5) * 0.05, 0.05);
       } else {
           state.camera.rotation.z = THREE.MathUtils.lerp(state.camera.rotation.z, 0, 0.05);
+      }
+      
+      // Random Pulsing of the Distort Sphere
+      if(meshRef.current) {
+        meshRef.current.distort = 0.5 + Math.sin(state.clock.elapsedTime) * 0.2;
       }
   });
 
@@ -218,19 +287,24 @@ function DreamAtmosphere({ mood }) {
       <directionalLight position={[5, 5, 5]} intensity={1.5} color={currentMood.color} />
       <pointLight position={[-5, -2, -5]} intensity={2} color="#ffffff" />
       
-      {/* ADDED: Fog for atmosphere */}
       <fog attach="fog" args={[mood === 'confused' ? '#1a1a1a' : '#000000', 2, mood === 'confused' ? 12 : 30]} />
 
       <Stars radius={100} depth={50} count={3000} factor={4} saturation={0} fade speed={1} />
       <DreiSparkles count={150} scale={15} size={3} speed={0.4} opacity={0.5} color={currentMood.color} />
       
-      {/* ADDED: Weather System */}
       <WeatherEffects mood={mood} />
+      
+      {/* ADDED: New floating relics layer */}
+      <FloatingRelics />
 
       <Float speed={2} rotationIntensity={0.5} floatIntensity={1}>
-        <Sphere args={[1, 32, 32]} position={[-3, 2, -5]}>
-            <MeshDistortMaterial color={currentMood.color} speed={2} distort={0.5} transparent opacity={0.3} />
+        <Sphere ref={meshRef} args={[1, 32, 32]} position={[-3, 2, -5]}>
+            <MeshDistortMaterial color={currentMood.color} speed={2} distort={0.5} transparent opacity={0.3} wireframe={Math.random() > 0.99} />
         </Sphere>
+        {/* ADDED: A Giant Halo Ring */}
+        <Torus args={[4, 0.02, 16, 100]} position={[0,0,-2]} rotation={[Math.PI/2, 0, 0]}>
+            <meshStandardMaterial emissive={currentMood.color} emissiveIntensity={0.5} color={currentMood.color} transparent opacity={0.5} />
+        </Torus>
         <Sphere args={[1.5, 32, 32]} position={[4, -2, -8]}>
             <MeshDistortMaterial color="#ffffff" speed={1.5} distort={0.4} transparent opacity={0.2} />
         </Sphere>
@@ -239,11 +313,8 @@ function DreamAtmosphere({ mood }) {
   );
 }
 
-/**
- * --- AVATAR CONTROLLER (YOUR ORIGINAL LOGIC PRESERVED) ---
- */
 function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
-  const { scene, camera } = useThree(); // Added camera here for your FOV logic
+  const { scene, camera } = useThree(); 
   const gltf = useLoader(GLTFLoader, url, loader => loader.register(parser => new VRMLoaderPlugin(parser)));
   
   const animState = useRef({
@@ -273,14 +344,12 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     return () => { scene.remove(vrm.scene); VRMUtils.deepDispose(vrm.scene); };
   }, [gltf, scene, setVrmRef, onLoaded]);
 
-  // --- PROCEDURAL ANIMATION ENGINE (YOUR EXACT LOGIC) ---
   useFrame(({ clock }) => {
     const vrm = gltf.userData.vrm;
     if (!vrm) return;
     vrm.update(clock.getDelta());
     const t = clock.getElapsedTime();
 
-    // Helper: Composite Sine Waves for Organic Noise
     const organicNoise = (offset, speed = 1) => {
         return Math.sin(t * speed + offset) * 0.5 + Math.sin(t * speed * 0.5 + offset * 2) * 0.3 + Math.sin(t * speed * 0.2 + offset) * 0.2;
     };
@@ -288,7 +357,6 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     const s = animState.current;
     const lerp = THREE.MathUtils.lerp;
 
-    // -- BONE REFERENCES --
     const hips = vrm.humanoid.getRawBoneNode("hips");
     const spine = vrm.humanoid.getRawBoneNode("spine");
     const neck = vrm.humanoid.getRawBoneNode("neck");
@@ -300,26 +368,21 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     const rHand = vrm.humanoid.getRawBoneNode("rightHand");
     const lLeg = vrm.humanoid.getRawBoneNode("leftUpperLeg");
     const rLeg = vrm.humanoid.getRawBoneNode("rightUpperLeg");
-    // Added Shoulder references used in your code
     const lShoulder = vrm.humanoid.getRawBoneNode("leftShoulder");
     const rShoulder = vrm.humanoid.getRawBoneNode("rightShoulder");
 
-    // 1. DEEP BREATHING (Spine & Neck)
     if(spine) {
         const breath = (Math.sin(t * 1.5) + Math.sin(t * 0.5)) * 0.02;
         spine.rotation.x = breath; 
         spine.rotation.y = organicNoise(0, 0.3) * 0.05; 
-        // ADDED: Mood Posture Overlay (Subtle)
         if(mood === 'sad') spine.rotation.x += 0.2; 
     }
     if(neck) {
         neck.rotation.y = organicNoise(5, 0.4) * 0.1;
         neck.rotation.x = Math.sin(t * 0.5) * 0.03;
-        // ADDED: Confused Head Tilt
         if(mood === 'confused') neck.rotation.z = Math.sin(t) * 0.1;
     }
     
-    // 2. LEGS (Floating/Treading Air)
     if(lLeg && rLeg) {
         lLeg.rotation.x = Math.sin(t * 1.5) * 0.1;
         rLeg.rotation.x = -Math.sin(t * 1.5) * 0.1;
@@ -327,7 +390,6 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
         rLeg.rotation.z = -0.1;
     }
 
-    // 3. TARGET CALCULATIONS (YOUR EXACT LOGIC)
     let tArmL, tArmR, tForeArm, tHand, tBob, tTwist;
 
     if (isSpeaking) {
@@ -357,7 +419,6 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
         tTwist = organicNoise(100, 0.2) * 0.3;
     }
 
-    // 4. SMOOTH INTERPOLATION
     s.armRotL = lerp(s.armRotL, tArmL, 0.05);
     s.armRotR = lerp(s.armRotR, tArmR, 0.05);
     s.foreArmRot = lerp(s.foreArmRot, tForeArm, 0.05);
@@ -365,7 +426,6 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     s.hipBob = lerp(s.hipBob, tBob, 0.4);
     s.hipTwist = lerp(s.hipTwist, tTwist, 0.1);
 
-    // 5. APPLY
     if(hips) { hips.position.y = s.hipBob; hips.rotation.y = s.hipTwist; }
     if(lArm) lArm.rotation.z = s.armRotL;
     if(rArm) rArm.rotation.z = s.armRotR;
@@ -378,39 +438,30 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
   return null;
 }
 
-/**
- * --- FACE CONTROLLER (UPDATED FOR EMOTIONS) ---
- */
 function FaceController({ vrm, analyser, mood }) {
     const { mouse } = useThree();
     useFrame(() => {
         if(!vrm) return;
 
-        // Head Look
         const head = vrm.humanoid?.getRawBoneNode("head");
         if(head) {
             head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, mouse.x * 0.4, 0.05);
             head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, mouse.y * 0.2, 0.05);
         }
 
-        // Random Blinking
         if(Math.random() < 0.005) {
             vrm.expressionManager.setValue('blink', 1);
             setTimeout(() => vrm.expressionManager.setValue('blink', 0), 150);
         }
 
-        // --- EMOTION LOGIC ---
         const mgr = vrm.expressionManager;
-        // Reset all first
         mgr.setValue('happy', 0); mgr.setValue('angry', 0); mgr.setValue('surprised', 0); mgr.setValue('sad', 0);
 
-        // Apply Mood
         if(mood === 'excitement' || mood === 'happy' || mood === 'calm') mgr.setValue('happy', 0.6);
         if(mood === 'fear' || mood === 'confused') mgr.setValue('surprised', 0.5);
         if(mood === 'frustrated') mgr.setValue('angry', 0.4);
         if(mood === 'sad') mgr.setValue('sad', 0.7);
 
-        // Lip Sync
         if(analyser) {
             const data = new Uint8Array(analyser.frequencyBinCount);
             analyser.getByteTimeDomainData(data);
@@ -432,18 +483,13 @@ function FaceController({ vrm, analyser, mood }) {
     return null;
 }
 
-/**
- * --- BACKGROUND BLOBS (Organic UI) ---
- */
 function BackgroundBlobs({ mood }) {
     const color = MOODS[mood]?.color || MOODS.neutral.color;
     
     return (
         <div className="absolute inset-0 overflow-hidden -z-10 pointer-events-none transition-all duration-1000">
-            {/* Animated Gradient Background */}
             <div className={`absolute inset-0 bg-gradient-to-br from-indigo-950 via-purple-950 to-black transition-colors duration-1000 ${mood === 'sad' ? 'grayscale' : ''}`} />
             
-            {/* Organic Floating Blobs */}
             <motion.div 
                 animate={{ x: [0, 100, 0], y: [0, -50, 0], scale: [1, 1.2, 1] }}
                 transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
@@ -460,9 +506,6 @@ function BackgroundBlobs({ mood }) {
     );
 }
 
-/**
- * --- MAIN APPLICATION ---
- */
 export default function DreamApp() {
   const [mounted, setMounted] = useState(false);
   const [apiKey, setApiKey] = useState("");
@@ -484,7 +527,6 @@ export default function DreamApp() {
     if(stored) try { setApiKey(JSON.parse(stored)); } catch {}
   }, []);
 
-  // --- SILENCE/EMOTION TIMER LOGIC (NEW) ---
   useEffect(() => {
       if(!audioReady || isSpeaking) return;
       
@@ -526,11 +568,9 @@ export default function DreamApp() {
     if(!audioContextRef.current) initAudio();
     if(audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
 
-    // Reset interaction timer & Mood
     setLastInteraction(Date.now());
     const detectedMood = analyzeSentiment(text);
     
-    // Override sentiment if just "talking" to default to happy/friendly interaction
     const finalMood = detectedMood === 'neutral' ? 'happy' : detectedMood;
     setMood(finalMood);
     
@@ -552,7 +592,7 @@ export default function DreamApp() {
              audio.onended = () => { 
                 setIsSpeaking(false); 
                 setStatus("Idle"); 
-                setLastInteraction(Date.now()); // Reset timer again after finish
+                setLastInteraction(Date.now());
              };
           }
       } catch (e) {
@@ -581,10 +621,8 @@ export default function DreamApp() {
   return (
     <div className="relative w-full h-screen overflow-hidden text-white font-sans" onClick={() => !audioReady && initAudio()}>
       
-      {/* Background with Emotion State */}
       <BackgroundBlobs mood={mood} />
 
-      {/* CONFUSED BLUR OVERLAY */}
       <AnimatePresence>
         {mood === 'confused' && (
             <motion.div 
@@ -598,7 +636,9 @@ export default function DreamApp() {
       </AnimatePresence>
 
       <Canvas camera={{ position: [0, 1.25, 3.5], fov: 30 }}>
-         {/* Atmosphere passed mood for Weather/Fog */}
+         {/* ADDED: Dream FX Wrapper */}
+         <DreamFX mood={mood} />
+         
          <DreamAtmosphere mood={mood} />
          <Suspense fallback={<Html center><div className="animate-pulse tracking-widest text-xs">SUMMONING LUMINA...</div></Html>}>
             <Avatar url={VRM_URL} setVrmRef={setVrmRef} isSpeaking={isSpeaking} mood={mood} />
@@ -607,7 +647,6 @@ export default function DreamApp() {
          <OrbitControls enablePan={false} enableZoom={false} maxPolarAngle={Math.PI/2} minPolarAngle={Math.PI/2.5} />
       </Canvas>
 
-      {/* --- FLUID GLASS UI --- */}
       <motion.div 
          initial={{ y: 100, opacity: 0 }} 
          animate={{ y: 0, opacity: 1, filter: mood === 'confused' ? 'blur(4px)' : 'blur(0px)' }} 
@@ -617,7 +656,6 @@ export default function DreamApp() {
         <div className="w-full max-w-lg backdrop-blur-2xl bg-white/5 border border-white/10 rounded-[3rem] p-4 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] transition-all duration-500"
              style={{ boxShadow: `0 0 40px ${MOODS[mood].color}20` }}>
             
-            {/* Status Pill */}
             <div className="flex justify-center mb-4">
                 <div className="px-4 py-1 rounded-full bg-black/20 text-[10px] font-bold tracking-[0.2em] uppercase flex items-center gap-2 text-white/80">
                     {mood === 'sad' && <CloudRain size={12} />}
