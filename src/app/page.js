@@ -8,19 +8,19 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Sparkles, Wand2, CloudRain, Flower, HelpCircle, Music, Music2 } from "lucide-react";
+import { Mic, Sparkles, Wand2, CloudRain, Flower, HelpCircle, Music, Music2, Trash2 } from "lucide-react";
 
 /**
  * CONFIG
  */
 const VRM_URL = "/model/6441211855445306245.vrm";
-// A royalty-free soothing ambient track
 const BGM_URL = "https://cdn.pixabay.com/audio/2022/08/02/audio_884fe92c21.mp3"; 
 
 const SYSTEM_PROMPT = `
 You are Lumina, a Dream Fairy.
 Voice: Soft, whispery, magical.
 Persona: You guide travelers through their own subconscious.
+Memory: You remember previous things the user told you in this conversation.
 Emotions: You reflect the user's emotion. If they are scared, be protective. If happy, be radiant.
 Style: Speak in friendly voice as if you are her friend. Max 2 sentences.
 `;
@@ -336,33 +336,27 @@ function Avatar({ url, onLoaded, setVrmRef, isSpeaking, mood }) {
     let tArmL, tArmR, tForeArm, tHand, tBob, tTwist;
 
     if (isSpeaking) {
-      // 1. Subtle Camera Zoom (Focus on speaker)
+      // 1. Subtle Camera Zoom
       camera.fov = THREE.MathUtils.lerp(camera.fov, 50, 0.05);
       camera.updateProjectionMatrix();
   
       // 2. Realistic "Explaining" Gestures
-      // Arms: Held steady near the body (approx 75 degrees), not flared out
       tArmL = 1.3 + Math.sin(t * 0.5) * 0.05; 
       tArmR = -1.3 - Math.sin(t * 0.5) * 0.05;
       
-      // Forearms: The main gesture. Flexing up to chest level rhythmically
-      // We mix a fast sine wave (speech rhythm) with a slow one (variation)
-      const gestureCycle = Math.sin(t * 3) * 0.5 + 0.5; // Oscillates 0 to 1
-      tForeArm = 0.6 + (gestureCycle * 0.2); // Elbows bent, hands moving slightly
+      const gestureCycle = Math.sin(t * 3) * 0.5 + 0.5; 
+      tForeArm = 0.6 + (gestureCycle * 0.2); 
 
-      // Hands: Slightly open/relaxed palms
       tHand = 0.2 + organicNoise(4, 2, 0.1);
       
       // 3. Body Rhythm
-      tBob = Math.sin(t * 4) * 0.002; // Tiny vertical bounce matches speech
-      tTwist = organicNoise(6, 0.5, 0.05); // Very slow rotation
+      tBob = Math.sin(t * 4) * 0.002;
+      tTwist = organicNoise(6, 0.5, 0.05);
   
-      // 4. Head Nods (Critical for believable Lip Sync)
-      // Small, fast nods make the character look like they are emphasizing words
+      // 4. Head Nods
       if (neck) neck.rotation.x = Math.sin(t * 6) * 0.03; 
       if (spine) spine.rotation.x = -0.05 + Math.sin(t * 1) * 0.02;
       
-      // Relax shoulders
       if (lShoulder) lShoulder.rotation.z = 0.1;
       if (rShoulder) rShoulder.rotation.z = -0.1;
   }
@@ -470,7 +464,7 @@ export default function DreamApp() {
   const [mood, setMood] = useState('neutral');
   const [lastInteraction, setLastInteraction] = useState(0);
   
-  // NEW: BGM State
+  // BGM State
   const [bgmMuted, setBgmMuted] = useState(false);
   const bgmRef = useRef(null);
 
@@ -479,15 +473,20 @@ export default function DreamApp() {
   const analyserRef = useRef(null);
   const historyRef = useRef([]);
 
+  // --- NEW: Load Memory on Mount ---
   useEffect(() => {
     setMounted(true);
-    const stored = localStorage.getItem("dreamApiKey");
-    if(stored) try { setApiKey(JSON.parse(stored)); } catch {}
+    const storedKey = localStorage.getItem("dreamApiKey");
+    if(storedKey) try { setApiKey(JSON.parse(storedKey)); } catch {}
 
-    // Initialize Background Music Object (Paused)
+    const storedMem = localStorage.getItem("dreamMemory");
+    if(storedMem) {
+        try { historyRef.current = JSON.parse(storedMem); } catch {}
+    }
+
     const bgm = new Audio(BGM_URL);
     bgm.loop = true;
-    bgm.volume = 0.2; // Keep volume low so voice is clear
+    bgm.volume = 0.2; 
     bgmRef.current = bgm;
 
     return () => { if(bgmRef.current) bgmRef.current.pause(); }
@@ -507,7 +506,6 @@ export default function DreamApp() {
   }, [audioReady, isSpeaking, mood, lastInteraction]);
 
   const initAudio = useCallback(() => {
-    // 1. Start Audio Context
     if(audioContextRef.current) return;
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     const ctx = new AudioContext();
@@ -524,7 +522,6 @@ export default function DreamApp() {
     audioElementRef.current = audio;
     analyserRef.current = analyser;
 
-    // 2. Start Background Music (Only now, due to browser autoplay policy)
     if(bgmRef.current && !bgmMuted) {
         bgmRef.current.play().catch(e => console.log("BGM Play failed", e));
     }
@@ -545,6 +542,15 @@ export default function DreamApp() {
     setBgmMuted(!bgmMuted);
   };
 
+  // --- NEW: Clear Memory Function ---
+  const clearMemory = (e) => {
+      e.stopPropagation();
+      localStorage.removeItem("dreamMemory");
+      historyRef.current = [];
+      setStatus("Memory Wiped");
+      setTimeout(() => setStatus("Idle"), 2000);
+  };
+
   const handleSpeak = useCallback(async (text) => {
     if(!apiKey) return;
     if(!audioContextRef.current) initAudio();
@@ -562,6 +568,10 @@ export default function DreamApp() {
     try {
       const reply = await callGeminiText(apiKey, historyRef.current, text);
       historyRef.current.push({ role: "model", content: reply });
+      
+      // --- NEW: Save Memory ---
+      localStorage.setItem("dreamMemory", JSON.stringify(historyRef.current));
+      
       setStatus("Whispering...");
 
       try {
@@ -669,6 +679,11 @@ export default function DreamApp() {
                     {/* BGM Toggle Button */}
                     <button onClick={toggleBgm} className="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center hover:bg-white/20 transition">
                          {bgmMuted ? <Music2 size={20} className="text-white/50" /> : <Music size={20} className="animate-pulse text-white" />}
+                    </button>
+
+                    {/* NEW: Forget Button */}
+                    <button onClick={clearMemory} title="Forget Memory" className="w-14 h-14 bg-red-500/10 hover:bg-red-500/20 rounded-full flex items-center justify-center transition group">
+                         <Trash2 size={20} className="text-red-300 group-hover:text-red-200" />
                     </button>
 
                     <div className="flex flex-col gap-1 justify-center">
