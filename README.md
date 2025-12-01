@@ -13,8 +13,7 @@ Unlike standard AI wrappers, Lumina features **real-time lip-syncing**, **emotio
 ## 🚀 Key Features
 
 * **🧠 Gemini AI Brain:** Powered by Google's `Gemini-2.0-flash` for fast, creative, and roleplay-aware conversations.
-* **🗣️ Native Anime Voice:** Uses the browser's native `SpeechSynthesis` API tuned to sound like a friendly, energetic character (Zero cost, no API limits).
-* **👄 Real-Time Lip Sync:** The 3D avatar's mouth moves perfectly in sync with the audio volume.
+* **🗣️ Native Voice:** Uses the browser's native `SpeechSynthesis` API tuned to sound like a friendly, energetic character (Zero cost, no API limits).
 
 * **🌦️ Emotional Atmosphere:** The environment reacts to the conversation:
     * *Happy/Excited:* Floating flowers & warm colors.
