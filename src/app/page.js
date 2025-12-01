@@ -2,13 +2,13 @@
 
 import React, { useRef, useEffect, useState, useCallback, Suspense, useMemo } from "react";
 import { Canvas, useFrame, useThree, useLoader } from "@react-three/fiber";
-import { OrbitControls, Html, Sphere, Stars, Sparkles as DreiSparkles, Float, Torus } from "@react-three/drei";
+import { OrbitControls, Html, Sphere, Stars, Sparkles as DreiSparkles, Float, Torus, useProgress } from "@react-three/drei";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Sparkles, Wand2, CloudRain, Flower, HelpCircle, Music, Music2, Trash2 } from "lucide-react";
+import { Mic, Sparkles, Wand2, CloudRain, Flower, HelpCircle, Music, Music2, Trash2, Loader2 } from "lucide-react";
 
 /**
  * CONFIG
@@ -201,8 +201,6 @@ const callGoogleTTS = async (apiKey, text, mood) => {
   const payload = {
     input: { ssml },
     voice: { languageCode: "en-US", name: "en-US-Neural2-F" },
-    // CRITICAL FIX: Removed 'pitch' and 'speakingRate' from here.
-    // We rely 100% on the SSML above to control the voice.
     audioConfig: { 
         audioEncoding: "MP3",
         effectsProfileId: ["headphone-class-device"] 
@@ -274,6 +272,22 @@ const analyzeSentiment = (text) => {
 /**
  * --- SCENE COMPONENTS ---
  */
+
+// --- NEW LOADING SCREEN COMPONENT ---
+function LoadingScreen() {
+  const { progress } = useProgress();
+  return (
+    <Html center>
+      <div className="flex flex-col items-center justify-center gap-4">
+        <Loader2 className="w-10 h-10 text-purple-300 animate-spin" />
+        <div className="text-white font-bold tracking-widest text-sm animate-pulse bg-black/40 px-4 py-2 rounded-full backdrop-blur-sm">
+          SUMMONING LUMINA... {progress.toFixed(0)}%
+        </div>
+      </div>
+    </Html>
+  );
+}
+
 function DreamAtmosphere({ mood }) {
   const currentMood = MOODS[mood] || MOODS.neutral;
 
@@ -444,8 +458,8 @@ function FaceController({ vrm, analyser, mood }) {
         if(!vrm) return;
         const head = vrm.humanoid?.getRawBoneNode("head");
         if(head) {
-            head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, mouse.x * 0.4, 0.05);
-            head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, mouse.y * 0.2, 0.05);
+            head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, -mouse.x * 0.8, 0.1);
+            head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, -mouse.y * 0.5, 0.1);
         }
         if(Math.random() < 0.005) {
             vrm.expressionManager.setValue('blink', 1);
@@ -681,7 +695,8 @@ export default function DreamApp() {
         >
          <DreamFX mood={mood} />
          <DreamAtmosphere mood={mood} />
-         <Suspense fallback={<Html center><div className="animate-pulse tracking-widest text-xs">SUMMONING LUMINA...</div></Html>}>
+         {/* Updated Suspense with new Loading Screen */}
+         <Suspense fallback={<LoadingScreen />}>
             <Avatar url={VRM_URL} setVrmRef={setVrmRef} isSpeaking={isSpeaking} mood={mood} />
             {vrmRef && <FaceController vrm={vrmRef} analyser={analyserRef.current} mood={mood} />}
          </Suspense>

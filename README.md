@@ -15,6 +15,8 @@ Unlike standard AI wrappers, Lumina features **real-time lip-syncing**, **emotio
 * **🧠 Gemini AI Brain:** Powered by Google's `Gemini-2.0-flash` for fast, creative, and roleplay-aware conversations.
 * **🗣️ Native Voice:** Uses the browser's native `SpeechSynthesis` API tuned to sound like a friendly, energetic character (Zero cost, no API limits).
 
+* **👀 Interactive Head Tracking:** Lumina's head follows your mouse cursor, creating a sense of presence and eye contact.
+
 * **🌦️ Emotional Atmosphere:** The environment reacts to the conversation:
     * *Happy/Excited:* Floating flowers & warm colors.
     * *Sad:* Rain & greyscale tones.
