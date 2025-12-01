@@ -46,7 +46,7 @@ Unlike standard AI wrappers, Lumina features **real-time lip-syncing**, **emotio
     npm install
     ```
 
-3.  **Add Your Custom 3D Model:**
+3.  **Add Your Custom 3D Model (Optional):**
     * Place your VRM file inside the `public/model/` folder.
     * *Note: The code expects the file at `/model/6441211855445306245.vrm`. You can change the `VRM_URL` constant in the code to match your file name.*
 
