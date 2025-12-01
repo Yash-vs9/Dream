@@ -13,9 +13,9 @@ Unlike standard AI wrappers, Lumina features **real-time lip-syncing**, **emotio
 ## 🚀 Key Features
 
 * **🧠 Gemini AI Brain:** Powered by Google's `Gemini-2.0-flash` for fast, creative, and roleplay-aware conversations.
-* **🗣️ Native Anime Voice:** Uses the browser's native `SpeechSynthesis` API tuned to sound like a cute, energetic anime character (Zero cost, no API limits).
+* **🗣️ Native Anime Voice:** Uses the browser's native `SpeechSynthesis` API tuned to sound like a friendly, energetic character (Zero cost, no API limits).
 * **👄 Real-Time Lip Sync:** The 3D avatar's mouth moves perfectly in sync with the audio volume.
-* **👀 Interactive Head Tracking:** Lumina's head follows your mouse cursor, creating a sense of presence and eye contact.
+
 * **🌦️ Emotional Atmosphere:** The environment reacts to the conversation:
     * *Happy/Excited:* Floating flowers & warm colors.
     * *Sad:* Rain & greyscale tones.
@@ -36,16 +36,16 @@ Unlike standard AI wrappers, Lumina features **real-time lip-syncing**, **emotio
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/your-username/dream-fairy-lumina.git](https://github.com/your-username/dream-fairy-lumina.git)
-    cd dream-fairy-lumina
+    git clone [https://github.com/Yash-vs9/Dream.git](https://github.com/Yash-vs9/Dream.git)
+    cd my-joi-app
     ```
 
 2.  **Install Dependencies:**
     ```bash
-    npm install three @react-three/fiber @react-three/drei @react-three/postprocessing @pixiv/three-vrm framer-motion lucide-react
+    npm install
     ```
 
-3.  **Add Your 3D Model:**
+3.  **Add Your Custom 3D Model:**
     * Place your VRM file inside the `public/model/` folder.
     * *Note: The code expects the file at `/model/6441211855445306245.vrm`. You can change the `VRM_URL` constant in the code to match your file name.*
 
