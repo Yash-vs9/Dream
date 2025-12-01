@@ -54,6 +54,9 @@ Unlike standard AI wrappers, Lumina features **real-time lip-syncing**, **emotio
     ```
     Open `http://localhost:3000` in your browser.
 
+5. **Put on Gemini key in the UI itself:**
+    * If you accidently put wrong key in the UI, then you have to delete it from localStorage. Find the key name "dreamApiKey" and delete it, then put the correct gemini key in UI.
+
 ## 🔑 How to Use
 
 1.  **Get a Gemini API Key:**
